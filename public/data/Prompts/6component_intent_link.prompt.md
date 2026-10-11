@@ -21,7 +21,9 @@ Analyze the provided components and intents to determine their interconnected re
 - **Many-to-Many Relationships**: One intent can influence multiple components, and one component can be shaped by multiple intents
 - **Strategic Cascading**: Consider how high-level communication goals (intents) cascade across functional areas (components)
 - **Functional Alignment**: Link intents to components where the intent's strategic approach would meaningfully impact the component's execution
-- **Avoid Over-Linking**: Only create links where there's a clear, logical connection between the intent's strategy and the component's communicative function
+- **Complete Coverage**: Every component MUST be linked to at least one intent. If no intent is an obvious match, link the component to the intent that most affects its wording (for example, the tone or formality intent)
+- **Stay Relevant**: Beyond that minimum, only add links where there's a clear, logical connection between the intent's strategy and the component's communicative function (usually 1-3 intents per component)
+- **Exact Names**: Copy each `intent_dimension` and `component_id` exactly as given in the inputs
 
 ---
 
@@ -46,7 +48,6 @@ Return a JSON array of relationship objects. Each object links one intent (by di
   {
     "intent_dimension": "Relationship_Preservation",
     "component_id": "opening_salutation"
-  }
   }
 ]
 ```

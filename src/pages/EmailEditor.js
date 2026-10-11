@@ -3,9 +3,12 @@ import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
 import { Card, Typography, message, Button, Row, Col, Tooltip, Tag, Radio, Checkbox, Flex, Modal, Input } from 'antd';
 import axios from 'axios';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { SendOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
 import stylebookSVG from '../stylebook.svg';
+import FactorPanel, { useFactorSelection } from './FactorPanel';
+import avatarImg from '../Avatar.png';
+import avatarImg_u from '../avatarUser.png';
 
 const { Title } = Typography;
 
@@ -102,22 +105,55 @@ const getNodeText = (editor, node) => {
 
 
 const EmailEditor = () => {
-    const location = useLocation();
-    const { state } = location;
-    // 刷新页面或从侧栏进入时路由 state 会丢失，此时从后端保存的 meta/task.json 恢复任务内容
-    const [recoveredUserTask, setRecoveredUserTask] = useState('');
-    const userTask = state?.userTask || recoveredUserTask;
-    const navigate = useNavigate();
     const editor = useMemo(() => withReact(createEditor()), []);
     const { globalState } = useGlobalContext();
     const { username: globalUsername, taskId: globalTaskId, userTask: globalUserTask } = globalState;
 
+    // 任务输入与编辑器是同一个页面：还没有任务内容时显示输入框，提交后显示编辑器
+    const [taskInput, setTaskInput] = useState('');
+    const [submittedTask, setSubmittedTask] = useState({ taskId: null, text: '' });
+    // 刷新页面后从后端保存的 meta/task.json 恢复任务内容
+    const [recoveredUserTask, setRecoveredUserTask] = useState('');
+    const [taskChecked, setTaskChecked] = useState(false);
+    const userTask = (submittedTask.taskId === globalTaskId && submittedTask.text) || recoveredUserTask;
+
     useEffect(() => {
-        if (state?.userTask || !globalTaskId) return;
+        let cancelled = false;
+        setRecoveredUserTask('');
+        if (!globalTaskId) {
+            setTaskChecked(true);
+            return;
+        }
+        setTaskChecked(false);
         axios.get(`http://localhost:3001/sessiondata/${globalTaskId}/meta/task.json`)
-            .then(response => setRecoveredUserTask((response.data?.original_task || '').trim()))
-            .catch(error => console.error('Failed to recover user task:', error));
-    }, [state?.userTask, globalTaskId]);
+            .then(response => {
+                if (!cancelled) setRecoveredUserTask((response.data?.original_task || '').trim());
+            })
+            .catch(error => console.error('Failed to recover user task:', error))
+            .finally(() => {
+                if (!cancelled) setTaskChecked(true);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [globalTaskId]);
+
+    const handleSubmitTask = async () => {
+        const text = taskInput.trim();
+        if (!text || !globalTaskId) return;
+        try {
+            // Update meta/task.json with original_task
+            await axios.post(`http://localhost:3001/update-task-meta`, {
+                userName: globalUsername,
+                taskId: globalTaskId,
+                originalTask: text
+            });
+        } catch (error) {
+            console.error('Error updating task meta:', error);
+        }
+        setSubmittedTask({ taskId: globalTaskId, text });
+        setTaskInput('');
+    };
 
     // Use global state
     const taskId = globalTaskId;
@@ -156,7 +192,31 @@ const EmailEditor = () => {
     const [modificationReason, setModificationReason] = useState('');
     const [lastModifiedComponent, setLastModifiedComponent] = useState(null);
     const [regenerateLoading, setRegenerateLoading] = useState(false);
-    const [anchorLoading, setAnchorLoading] = useState(false);
+    // The editor stays blank until a draft has been generated from the factor panel
+    const [hasDraft, setHasDraft] = useState(false);
+    const [draftGenerating, setDraftGenerating] = useState(false);
+    // Factor selections are made in the chat step first, then stay editable in the editor sidebar
+    const factorSelection = useFactorSelection({
+        userTask,
+        userName: globalUsername,
+        taskId: globalTaskId,
+        onDraftGenerated: (draft) => applyDraftText(draft),
+        onLoadingChange: setDraftGenerating
+    });
+    // The editor opens once the user confirms their choices in the chat step (or a draft already exists)
+    const [confirmedTaskId, setConfirmedTaskId] = useState(null);
+    const inEditor = hasDraft || confirmedTaskId === globalTaskId;
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+    const handleConfirmAndGenerate = () => {
+        setConfirmedTaskId(globalTaskId);
+        setSidebarCollapsed(false);
+        factorSelection.handleGenerateDraft();
+    };
+    // "Ask AI to add content" states
+    const [aiPrompt, setAiPrompt] = useState('');
+    const [aiLoading, setAiLoading] = useState(false);
+    const [aiPreview, setAiPreview] = useState({ visible: false, content: '' });
     const [modalSaveLoading, setModalSaveLoading] = useState(false);
     
     // Utility function to safely reset editor state
@@ -200,166 +260,84 @@ const EmailEditor = () => {
     }, []);
     
 
-    // Generate Anchors function with improved error handling and timeout
-    const handleGenerateAnchors = async () => {
-        // Prevent multiple simultaneous requests
-        if (anchorLoading) {
-            console.log('Anchor generation already in progress, ignoring duplicate request');
-            return;
-        }
-        
-        let timeoutId1, timeoutId2;
-        
-        try {
-            setAnchorLoading(true);
-            
-            // Configure axios with timeout for this session
-            const axiosConfig = {
-                timeout: 115000, // 115 seconds for individual requests (本地 Ollama 较慢)
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            };
-            
-            // Create timeout promise for anchor generation (30 seconds)
-            const createTimeoutPromise = (timeoutMs, errorMessage) => {
-                return new Promise((_, reject) => {
-                    const id = setTimeout(() => {
-                        reject(new Error(errorMessage));
-                    }, timeoutMs);
-                    return id;
-                });
-            };
-            
-            // Step 1: Generate anchor data with timeout
-            console.log('Step 1: Generating anchor data...');
-            message.loading('Generating anchor data...', 0);
-            
-            const anchorPromise = axios.post('http://localhost:3001/generate-anchor-builder', {
-                userTask: userTask,
-                userName: globalUsername,
-                taskId: globalTaskId
-            }, axiosConfig);
-            
-            const timeout1 = createTimeoutPromise(120000, 'Timeout: Anchor generation is taking too long. Please check your network connection and try again.');
-            
-            let response;
-            try {
-                response = await Promise.race([anchorPromise, timeout1]);
-                message.destroy(); // Clear loading message
-                console.log('✓ Anchor data generated successfully');
-            } catch (error) {
-                message.destroy();
-                if (error.message.includes('Timeout')) {
-                    message.error(error.message, 5);
-                } else if (error.code === 'ECONNABORTED' || error.code === 'ERR_NETWORK') {
-                    message.error('Network error: Unable to connect to anchor generation service. Please check your connection and try again.', 5);
-                } else {
-                    message.error('Failed to generate anchor data. Please try again.', 3);
-                }
-                console.error('Anchor generation failed:', error);
-                return;
-            }
-            
-            // Validate response
-            if (!response.data || !response.data.anchorData) {
-                message.error('Invalid response from anchor generation service. Please try again.');
-                console.error('Invalid anchor response:', response.data);
-                return;
-            }
-            
-            // Parse anchor data as JSON
-            let parsedAnchorData;
-            try {
-                const sanitizedContent = response.data.anchorData.replace(/```json|```/g, '');
-                parsedAnchorData = JSON.parse(sanitizedContent);
-                console.log('✓ Anchor data parsed successfully');
-            } catch (error) {
-                console.error('Failed to parse anchor data:', error);
-                message.error('Failed to parse anchor data format. Please try regenerating.');
-                return;
-            }
-            
-            // Validate parsed data structure
-            if (!parsedAnchorData.persona || !parsedAnchorData.situation) {
-                message.error('Incomplete anchor data received. Missing persona or situation information.');
-                console.error('Invalid anchor data structure:', parsedAnchorData);
-                return;
-            }
-            
-            // Step 2: Generate and save images with timeout
-            console.log('Step 2: Generating images...');
-            message.loading('Generating persona and situation images...', 0);
-            
-            const imageAxiosConfig = {
-                ...axiosConfig,
-                timeout: 55000 // 55 seconds for image generation (longer as it's more intensive)
-            };
-            
-            const imagePromise = axios.post('http://localhost:3002/generate-and-save-images', {
-                userName: globalUsername,
-                personaAnchor: parsedAnchorData.persona,
-                situationAnchor: parsedAnchorData.situation,
-                userTask: userTask,
-                taskId: globalTaskId
-            }, imageAxiosConfig);
-            
-            const timeout2 = createTimeoutPromise(60000, 'Timeout: Image generation is taking too long. Please check your network connection and try again.');
-            
-            let imageResponse;
-            try {
-                imageResponse = await Promise.race([imagePromise, timeout2]);
-                message.destroy(); // Clear loading message
-                console.log('✓ Images generated successfully');
-            } catch (error) {
-                // 图片服务（serverDB.js，端口 3002）未启动时静默失败，继续后续流程
-                message.destroy();
-                console.warn('Image generation skipped:', error.message);
-                imageResponse = { data: {} };
-            }
-            
-            // Step 3: Combine data and navigate
-            const anchorContentWithImages = {
-                ...parsedAnchorData,
-                personaImagePath: imageResponse.data.personaImagePath,
-                situationImagePath: imageResponse.data.situationImagePath,
-                personaJsonPath: imageResponse.data.personaJsonPath,
-                situationJsonPath: imageResponse.data.situationJsonPath
-            };
-            
-            console.log('✓ All anchor content prepared successfully');
-            console.log('Passing to AnchorBuilder:', anchorContentWithImages);
-            
-            message.success('Anchors generated successfully! Navigating to Anchor Builder...', 2);
-            
-            // Navigate to AnchorBuilder page with the data
-            navigate('/anchorBuilders', {
-                state: {
-                    anchorContent: anchorContentWithImages,
-                    userTask: userTask,
-                    userName: globalUsername,
-                    taskId: globalTaskId
-                }
+    // Replace the whole editor content with a new draft text
+    const applyDraftText = (newContent) => {
+        setOriginalText(newContent);
+
+        // Parse content into Slate format
+        const slateContent = newContent
+            .split('\n\n')
+            .filter(paragraph => paragraph.trim())
+            .map((paragraph) => ({
+                type: 'paragraph',
+                children: [{ text: paragraph.trim() }],
+            }));
+
+        if (slateContent.length === 0) {
+            slateContent.push({
+                type: 'paragraph',
+                children: [{ text: '' }],
             });
-            
-        } catch (error) {
-            message.destroy(); // Clear any loading messages
-            console.error('Unexpected error in generateAnchors:', error);
-            
-            // Provide specific error messages based on error type
-            if (error.message?.includes('Network Error') || error.code === 'ERR_NETWORK') {
-                message.error('Network connection error. Please check your internet connection and try again.', 5);
-            } else if (error.message?.includes('timeout') || error.code === 'ECONNABORTED') {
-                message.error('Request timeout. The service is taking too long to respond. Please try again.', 5);
-            } else {
-                message.error('An unexpected error occurred while generating anchors. Please try again.', 3);
-            }
-        } finally {
-            // Ensure loading state is always reset
-            setAnchorLoading(false);
-            message.destroy(); // Clean up any remaining messages
-            console.log('Generate anchors process completed, loading state reset');
         }
+
+        setValue(slateContent);
+        setEditorKey(prev => prev + 1);
+
+        // Clear components and results
+        setComponents([]);
+        setCombinedResults([]);
+        setSelectedComponentId(null);
+        setFloatingToolbar({ visible: false, component: null, position: null });
+        setHasDraft(Boolean(newContent.trim()));
+    };
+
+    // Current plain text of the editor, including unsaved manual edits
+    const getCurrentDraftText = () => {
+        if (!value || !Array.isArray(value)) return '';
+        return value.map(node => getNodeText(null, node)).filter(text => text.trim()).join('\n\n');
+    };
+
+    // Ask AI to add content: request a revised full draft and show it for confirmation
+    const handleAiAddContent = async () => {
+        const userPrompt = aiPrompt.trim();
+        const currentDraft = getCurrentDraftText();
+        if (!userPrompt || !currentDraft.trim() || aiLoading) return;
+        try {
+            setAiLoading(true);
+            const response = await axios.post('http://localhost:3001/ai-add-content', {
+                userTask: userTask,
+                userName: globalUsername,
+                taskId: globalTaskId,
+                currentDraft,
+                userPrompt
+            });
+            setAiPreview({ visible: true, content: response.data.revisedDraft });
+        } catch (error) {
+            console.error('Failed to add content with AI:', error);
+            message.error('Failed to generate the revised draft. Please try again.');
+        } finally {
+            setAiLoading(false);
+        }
+    };
+
+    const handleApplyAiPreview = async () => {
+        const newContent = aiPreview.content;
+        applyDraftText(newContent);
+        setAiPreview({ visible: false, content: '' });
+        setAiPrompt('');
+        try {
+            await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
+                content: newContent
+            });
+            message.success('Draft updated');
+        } catch (error) {
+            console.error('Failed to save updated draft:', error);
+            message.error('Draft updated in the editor, but saving it failed');
+        }
+    };
+
+    const handleDiscardAiPreview = () => {
+        setAiPreview({ visible: false, content: '' });
     };
 
     // Regenerate Draft function
@@ -376,36 +354,13 @@ const EmailEditor = () => {
             
             if (response.data) {
                 const newContent = response.data.draft || response.data;
-                setOriginalText(newContent);
                 
                 // Save to drafts/latest.md
                 await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
                     content: newContent
                 });
                 
-                // Parse content into Slate format
-                const slateContent = newContent
-                    .split('\n\n')
-                    .filter(paragraph => paragraph.trim())
-                    .map((paragraph) => ({
-                        type: 'paragraph',
-                        children: [{ text: paragraph.trim() }],
-                    }));
-
-                if (slateContent.length === 0) {
-                    slateContent.push({
-                        type: 'paragraph',
-                        children: [{ text: '' }],
-                    });
-                }
-
-                setValue(slateContent);
-                setEditorKey(prev => prev + 1);
-                
-                // Clear components and results
-                setComponents([]);
-                setCombinedResults([]);
-                setSelectedComponentId(null);
+                applyDraftText(newContent);
                 
                 message.success('Draft regenerated successfully');
             }
@@ -423,8 +378,12 @@ const EmailEditor = () => {
         const fetchDraft = async () => {
             try {
                 const response = await axios.get(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`);
-                const draftContent = response.data || 'No content available.';
+                const draftContent = typeof response.data === 'string' ? response.data : '';
                 setOriginalText(draftContent);
+                setHasDraft(Boolean(draftContent.trim()));
+                setComponents([]);
+                setCombinedResults([]);
+                setSelectedComponentId(null);
                 
                 // Parse content into Slate format - preserve original structure
                 const slateContent = draftContent
@@ -439,7 +398,7 @@ const EmailEditor = () => {
                 if (slateContent.length === 0) {
                     slateContent.push({
                         type: 'paragraph',
-                        children: [{ text: 'No content available.' }],
+                        children: [{ text: '' }],
                     });
                 }
 
@@ -466,9 +425,11 @@ const EmailEditor = () => {
                 });
 
                 setValue(validatedContent);
+                setEditorKey(prev => prev + 1);
                 setContentLoaded(true);
             } catch (error) {
                 console.error('Failed to load draft:', error);
+                setHasDraft(false);
                 setValue([
                     {
                         type: 'paragraph',
@@ -590,6 +551,7 @@ const EmailEditor = () => {
                 handleCombinedResult();
             } catch (intentError) {
                 console.error('Error calling intent-analyzer-new or component-intent-link:', intentError);
+                message.error('Failed to generate intents. Please click "Generate Components" again.');
             }
         } catch (error) {
             console.error('Failed to extract components:', error);
@@ -3410,33 +3372,145 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         setEditorKey(prev => prev + 1);
     };
 
+    if (!userTask) {
+        if (!taskChecked) return null;
+        return (
+            <div className="firstPage">
+                <div style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh - 112px', backgroundColor: '#F8FAFC' }}>
+                    <div className="firstPage-content" style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', position: 'absolute', top: '50%', transform: 'translateY(-50%)' }}>
+                        <p className="firstPage-content-text">🤖Hi, I am email writing assistant.</p>
+                        <p className="firstPage-content-text-sub">What can I help with?</p>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', width: '100%' }}>
+                          <Input.TextArea
+                            value={taskInput}
+                            onChange={e => setTaskInput(e.target.value)}
+                            placeholder="Please input your Email task here..."
+                            autoSize={{ minRows: 2, maxRows: 6 }}
+                            style={{
+                              width: '90%',
+                              minHeight: '82px',
+                              borderRadius: '48px',
+                              border: '2px solid var(--Color-2, #475569)',
+                              background: '#FFF',
+                              display: 'flex',
+                              padding: '8px 16px',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              alignSelf: 'stretch',
+                            }}
+                          />
+                          <Button size="large" type="primary" shape="circle" icon={<SendOutlined />} onClick={handleSubmitTask} disabled={!taskInput.trim() || !globalTaskId}></Button>
+                        </div>
+                        {!globalTaskId && (
+                            <p style={{ marginTop: '12px', color: '#999' }}>Please enter a username at the top right first.</p>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (!inEditor) {
+        if (!contentLoaded) return null;
+        return (
+            <div className="firstPage" style={{ height: 'calc(100vh - 64px)' }}>
+                        <div className="chatContainer" style={{ padding: '24px 24px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', height: '100vh - 112px' }}>
+                            <div className="ChatMessage_User" style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '16px' }}>
+                                <img src={avatarImg_u} alt="avatar" style={{ marginRight: '8px', width: '40px', height: '40px' }} />
+                                <div className="ChatMessage_User_Content">
+                                    <p className="ChatMessage_User_Content_Label" style={{ color: '#000', fontSize: '16px', fontWeight: 'bold' }}>You</p>
+                                    <div className="ChatMessage_User_Content_Text">
+                                        {userTask}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="ChatMessage_Assistant" style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '16px', width: '100%' }}>
+                                <img src={avatarImg} alt="avatar" style={{ marginRight: '8px', alignSelf: 'flex-start' }} />
+                                <div className="ChatMessage_Assistant_Content" style={{ flex: 1, minWidth: 0 }}>
+                                <p className="ChatMessage_User_Content_Label" style={{ color: '#000', fontSize: '16px', fontWeight: 'bold' }}>PersonaMail Bot</p>
+                                    <FactorPanel
+                                        variant="chat"
+                                        selection={factorSelection}
+                                        userTask={userTask}
+                                        hasDraft={false}
+                                        canGenerate={Boolean(userTask && globalTaskId)}
+                                        onGenerate={handleConfirmAndGenerate}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+            </div>
+        );
+    }
+
     return (
         <div
             className='emailEditor'
             style={{
-                height: '100%',
-                overflow: 'auto !important'
+                display: 'flex',
+                alignItems: 'flex-start',
+                overflow: 'visible'
             }}
         >
+        {/* Factor sidebar: full height on the left */}
         <div
             style={{
-                height: '100%',
-                overflow: 'auto',
-                padding: '16px',
-                display: 'flex',
-                flexDirection: 'column',
+                display: sidebarCollapsed ? 'none' : 'block',
+                width: '360px',
+                flexShrink: 0,
+                height: 'calc(100vh - 64px)',
+                position: 'sticky',
+                top: 0,
+                background: '#fff',
+                borderRight: '1px solid #f0f0f0'
+            }}
+        >
+            <FactorPanel
+                variant="sidebar"
+                selection={factorSelection}
+                userTask={userTask}
+                hasDraft={hasDraft}
+                canGenerate={Boolean(userTask && globalTaskId)}
+                onGenerate={factorSelection.handleGenerateDraft}
+            />
+        </div>
+        {/* Arrow between the sidebar and the editor: hides / shows the sidebar */}
+        <div style={{ position: 'sticky', top: 0, height: 'calc(100vh - 64px)', width: 0, flexShrink: 0, zIndex: 10 }}>
+            <Button
+                shape="circle"
+                size="small"
+                icon={sidebarCollapsed ? <RightOutlined /> : <LeftOutlined />}
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: sidebarCollapsed ? '4px' : '-12px',
+                    transform: 'translateY(-50%)',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.15)'
+                }}
+            />
+        </div>
+        <div
+            style={{
+                flex: 1,
+                minWidth: 0,
+                height: 'calc(100vh - 64px)',
+                overflowY: 'auto',
+                padding: '24px',
             }}
         >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0 }}>
                 <div style={{ fontSize: '24px', fontWeight: 'bold' }}>Email Draft Editor</div>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                    <Button onClick={handleRegenerateDraft} loading={regenerateLoading}>Regenerate Draft</Button>
+                    <Button onClick={handleRegenerateDraft} loading={regenerateLoading} disabled={!hasDraft}>Regenerate Draft</Button>
                     <Button
                         onClick={handleSaveDraft}
+                        disabled={!hasDraft}
                     >
                         Save Draft
                     </Button>
-                    <Button onClick={handleExtractComponents} loading={loading}>
+                    <Button onClick={handleExtractComponents} loading={loading} disabled={!hasDraft}>
                         Generate Components
                     </Button>
                     <Button onClick={removeAllHighlighting}>
@@ -3445,22 +3519,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     <Button onClick={safeResetEditor} danger>
                         Reset Editor
                     </Button>
-                    <Button type="primary" onClick={handleGenerateAnchors} loading={anchorLoading} disabled={anchorLoading}>
-                        {anchorLoading ? 'Generating Anchors...' : 'Generate Anchors'}
-                    </Button>
-                    {anchorLoading && (
-                        <Button 
-                            onClick={() => {
-                                setAnchorLoading(false);
-                                message.destroy();
-                                message.warning('Anchor generation cancelled. You can try again.');
-                            }}
-                            danger
-                            style={{ marginLeft: 8 }}
-                        >
-                            Cancel
-                        </Button>
-                    )}
                 </div>
             </div>
             
@@ -3541,14 +3599,14 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                     <Toolbar />
                                     <div style={{ 
                                         flex: 1, 
-                                        overflow: 'auto',
-                                        maxHeight: 'calc(60vh - 50px)'
+                                        minHeight: 0,
+                                        overflow: 'auto'
                                     }}>
                                         <Editable
                                             renderElement={renderElement}
                                             renderLeaf={renderLeaf}
                                             onKeyDown={handleKeyDown}
-                                            placeholder={loading ? 'Loading...' : 'Start typing...'}
+                                            placeholder={loading ? 'Loading...' : draftGenerating ? 'Generating draft...' : hasDraft ? 'Start typing...' : 'Select your options in the left sidebar, then click "Generate Email Draft".'}
                                             style={{
                                                 padding: '16px',
                                                 minHeight: '400px',
@@ -3561,6 +3619,26 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                         />
                                     </div>
                                 </Slate>
+
+                                {/* Ask AI to add content */}
+                                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '8px', padding: '8px 16px', borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
+                                    <Input.TextArea
+                                        value={aiPrompt}
+                                        onChange={e => setAiPrompt(e.target.value)}
+                                        placeholder="Tell AI what to add, e.g. mention that I can meet next Tuesday"
+                                        autoSize={{ minRows: 1, maxRows: 3 }}
+                                        disabled={!hasDraft || aiLoading}
+                                    />
+                                    <Button
+                                        type="primary"
+                                        icon={<SendOutlined />}
+                                        onClick={handleAiAddContent}
+                                        loading={aiLoading}
+                                        disabled={!hasDraft || !aiPrompt.trim()}
+                                    >
+                                        Ask AI
+                                    </Button>
+                                </div>
                                 
                                 {/* Floating Toolbar */}
                                 {floatingToolbar.visible && (
@@ -3611,8 +3689,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                 
                                 <div style={{
                                     flex: 1,
-                                    overflow: 'auto',
-                                    maxHeight: 'calc(60vh - 80px)'
+                                    minHeight: 0,
+                                    overflow: 'auto'
                                 }}>
                                     {components.length === 0 ? (
                                         <div style={{ 
@@ -3841,6 +3919,34 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 )}
             </Card>
             
+            {/* AI Add Content Preview Modal */}
+            <Modal
+                title="Preview: Revised Email"
+                open={aiPreview.visible}
+                onCancel={handleDiscardAiPreview}
+                footer={[
+                    <Button key="discard" onClick={handleDiscardAiPreview}>
+                        Discard
+                    </Button>,
+                    <Button key="apply" type="primary" onClick={handleApplyAiPreview}>
+                        Apply
+                    </Button>
+                ]}
+                width={720}
+            >
+                <div style={{
+                    background: '#e6f7ff',
+                    padding: '12px',
+                    borderRadius: '4px',
+                    whiteSpace: 'pre-wrap',
+                    lineHeight: '1.8',
+                    maxHeight: '60vh',
+                    overflow: 'auto'
+                }}>
+                    {aiPreview.content}
+                </div>
+            </Modal>
+
             {/* Component Change Modal */}
             <Modal
                 title="Component Modification Record"

@@ -315,3 +315,17 @@ html, body {
   border-left: 1px solid #f0f0f0;
   height: 100%;
 }
+/* Factor panel in the Email Editor sidebar: fit the cards into a narrow column */
+.factor-panel-sidebar .ant-card-head {
+  padding: 0 12px;
+}
+.factor-panel-sidebar .ant-card-head-title {
+  white-space: normal;
+}
+.factor-panel-sidebar .ant-card-body {
+  padding: 12px;
+}
+/* Request box: same corner radius as the template dropdown below it */
+.factor-panel-sidebar .ChatMessage_Assistant_Content_Text {
+  border-radius: 6px;
+}

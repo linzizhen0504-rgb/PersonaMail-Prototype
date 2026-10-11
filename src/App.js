@@ -1,44 +1,16 @@
 // src/App.js
 import React, { useState, createContext, useContext, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import {
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
-  DesktopOutlined,
-  HomeOutlined,
-  FileTextOutlined,
-  TeamOutlined,
-  AppstoreOutlined,
-  EditOutlined,
-  SearchOutlined
-} from '@ant-design/icons';
-import { Breadcrumb, Layout, Menu, theme, Input, Button, Space, message } from 'antd';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
-import FirstPage from './pages/EmailTask';
-import SecondPage from './pages/EmailEditor';
-import ThirdPage from './pages/AnchorBuilder';
+import { EditOutlined } from '@ant-design/icons';
+import { Layout, theme, Input, Button, Space, message } from 'antd';
+import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom';
+import EmailEditorPage from './pages/EmailEditor';
 import 'antd/dist/reset.css';
 import './App.css'; // 引入自定义CSS文件
 import logoImg from './Logo.png'; // 引入图片
 import avatarImg from './avatarUser.png'; // 引入图片
 
-const { Header, Content, Footer, Sider } = Layout;
-
-function getItem(label, key, icon, children) {
-  return {
-    key,
-    icon,
-    children,
-    label,
-  };
-}
-
-const items = [
-  getItem('Email Task', '1', <HomeOutlined />),
-  getItem('Email Editor', '2', <FileTextOutlined />),
-  getItem('Anchors', '3', <TeamOutlined />),
-  // getItem('Situation Anchors', 'sub2', <AppstoreOutlined />, [getItem('Team 1', '6'), getItem('Team 2', '8')]),
-];
+const { Header, Content } = Layout;
 
 // Create a context for global state
 const GlobalContext = createContext();
@@ -46,14 +18,13 @@ const GlobalContext = createContext();
 export const useGlobalContext = () => useContext(GlobalContext);
 
 const App = () => {
-  const [collapsed, setCollapsed] = useState(false);
   const [username, setUsername] = useState('');
   const [inputValue, setInputValue] = useState('');
   const [taskId, setTaskId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
   const {
-    token: { colorBgContainer, borderRadiusLG },
+    token: { colorBgContainer },
   } = theme.useToken();
 
   const location = useLocation();
@@ -80,32 +51,6 @@ const App = () => {
       console.log('Restored taskId:', storedTaskId);
     }
   }, []);
-  const getSelectedKey = () => {
-      switch (location.pathname) {
-          case '/':
-              return '1';
-          case '/emailEditor':
-              return '2';
-          case '/anchorBuilders':
-              return '3';
-          default:
-              return '1';
-      }
-  };
-
-  const getBreadcrumbItems = () => {
-    switch (location.pathname) {
-      case '/':
-        return [{ title: 'Email Task' }];
-      case '/emailEditor':
-        return [{ title: 'Email Editor' }];
-      case '/anchorBuilders':
-        return [{ title: 'AnchorBuilders' }];
-      default:
-        return [{ title: 'Home' }];
-    }
-  };
-
   const handleUsernameSubmit = useCallback(async (event) => {
     if (event) event.preventDefault();
     if (!inputValue.trim() || isLoading) return;
@@ -154,6 +99,29 @@ const App = () => {
     }
   }, [inputValue, isLoading, location.pathname, navigate]);
 
+  // 为当前用户新建一个任务（新的 taskId），页面回到任务输入界面
+  const handleNewTask = useCallback(async () => {
+    if (!username || isLoading) return;
+
+    setIsLoading(true);
+
+    try {
+      const response = await axios.post('http://localhost:3001/create-session', {
+        userName: username,
+        userInput: username,
+      });
+
+      const { taskId: newTaskId } = response.data;
+      setTaskId(newTaskId);
+      localStorage.setItem('taskId', newTaskId);
+    } catch (error) {
+      console.error('Error creating new task:', error);
+      message.error('Failed to create new task', 2.5);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [username, isLoading]);
+
   // 处理用户名重置
   const handleUsernameReset = useCallback(() => {
     setUsername('');
@@ -175,49 +143,26 @@ const App = () => {
   return (
     <GlobalContext.Provider value={{ globalState, setGlobalState: () => {} }}>
       <Layout style={{ minHeight: '100vh' }}>
-        <Sider width="312px" theme="light" collapsible collapsed={collapsed} trigger={null}>
-          <div className="demo-logo-vertical" style={{ textAlign: 'center', padding: collapsed ? '16px 0' : '16px' }}>
-            <img src={logoImg} alt="logo" style={{ width: collapsed ? '32px' : 'auto', transition: 'width 0.3s' }} />
-            {!collapsed && <span style={{ marginLeft: '16px' }}>Persona Mail</span>}
-          </div>
-          <Menu 
-            theme="light" 
-            selectedKeys={[getSelectedKey()]} 
-            mode="inline" 
-            items={items}
-            onClick={({ key }) => {
-              switch(key) {
-                case '1':
-                  navigate('/');
-                  break;
-                case '2':
-                  navigate('/emailEditor');
-                  break;
-                case '3':
-                  navigate('/anchorBuilders');
-                  break;
-                default:
-                  break;
-              }
-            }}
-          />
-          <div style={{ 
-            position: 'absolute', 
-            bottom: '64px', 
-            width: '100%', 
-            padding: '0 16px', 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '8px' 
-          }}>
-            <img src={avatarImg} alt="avatar" style={{ width: '32px', height: '32px', borderRadius: '50%' }} />
-            {!collapsed && (
+          <Header style={{ paddingLeft: 0, background: colorBgContainer, display: 'flex', alignItems: 'center' }}>
+            <img src={logoImg} alt="logo" style={{ width: '32px', marginLeft: '24px' }} />
+            <span style={{ marginLeft: '12px', fontWeight: 500 }}>Persona Mail</span>
+            <div style={{ marginLeft: 'auto', marginRight: '24px', display: 'flex', alignItems: 'center', gap: '8px', width: '280px' }}>
+              <img src={avatarImg} alt="avatar" style={{ width: '32px', height: '32px', borderRadius: '50%' }} />
               <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
                 {username ? (
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                     <span style={{ color: '#1890ff', fontWeight: 500, fontSize: '14px' }}>
                       {username}
                     </span>
+                    <Button
+                      size="small"
+                      onClick={handleNewTask}
+                      title="Start a new email task"
+                      style={{ marginLeft: 'auto', marginRight: '4px', fontSize: '12px' }}
+                      disabled={isLoading}
+                    >
+                      New Task
+                    </Button>
                     <Button 
                       type="text" 
                       size="small" 
@@ -249,47 +194,21 @@ const App = () => {
                   </Space.Compact>
                 )}
               </div>
-            )}
-          </div>
-        </Sider>
-        <Layout>
-          <Header style={{ paddingLeft: 0, background: colorBgContainer, display: 'flex', alignItems: 'center' }}>
-            <Button
-              type="text"
-              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-              onClick={() => setCollapsed(!collapsed)}
-              style={{
-                fontSize: '16px',
-                width: 64,
-                height: 64,
-              }}
-            />
-            <Breadcrumb style={{ margin: '0 16px' }} items={getBreadcrumbItems()} />
-            {username && (
-              <div style={{ marginLeft: 'auto', marginRight: '24px', fontSize: '14px', color: '#666' }}>
-                Welcome, {username}
-              </div>
-            )}
+            </div>
           </Header>
           <Content>
             <div
               style={{
-                padding: 24,
                 minHeight: 360,
                 background: "#F8FAFC",
-                borderRadius: borderRadiusLG,
               }}
             >
               <Routes>
-                  <Route path="/" element={<FirstPage />} />
-                  <Route path="/emailEditor" element={<SecondPage />} />
-                  <Route path="/anchorBuilders" element={<ThirdPage />} />
+                  <Route path="/" element={<EmailEditorPage />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </div>
           </Content>
-          <Footer style={{ textAlign: 'center' }}>
-          </Footer>
-        </Layout>
       </Layout>
     </GlobalContext.Provider>
   );

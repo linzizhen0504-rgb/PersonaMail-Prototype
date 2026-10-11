@@ -295,14 +295,111 @@ async function sendRequestToOllama(prompt, timeout) {
 // 以下两个函数仅在使用 Ollama 时调用，把模型输出对齐回原始的 intent 名称和取值。
 const normalizeName = (name) => String(name).toLowerCase().replace(/[_\s]+/g, ' ').trim();
 
-function alignLinkDimensions(links, intents) {
-    if (!Array.isArray(links) || !Array.isArray(intents)) return links;
-    const byName = new Map(intents.map(intent => [normalizeName(intent.dimension), intent.dimension]));
-    return links.map(link => ({
-        ...link,
-        intent_dimension: byName.get(normalizeName(link.intent_dimension)) || link.intent_dimension
-    }));
+// Parse JSON from a model reply that may be wrapped in code fences, surrounded by prose,
+// or markdown-escaped (e.g. `\[` and `current\_value`)
+function parseModelJson(text) {
+    const cleaned = String(text).replace(/```json|```/g, '').trim();
+    const unescaped = cleaned.replace(/\\([\[\]_*])/g, '$1');
+    const candidates = [];
+    for (const candidate of [cleaned, unescaped]) {
+        candidates.push(candidate);
+        const start = candidate.search(/[\[{]/);
+        const end = Math.max(candidate.lastIndexOf(']'), candidate.lastIndexOf('}'));
+        if (start !== -1 && end > start) candidates.push(candidate.slice(start, end + 1));
+    }
+    let lastError;
+    for (const candidate of candidates) {
+        try {
+            return JSON.parse(candidate);
+        } catch (error) {
+            lastError = error;
+        }
+    }
+    throw lastError;
 }
+
+// Ask the model and parse its reply as JSON, asking again when the reply is not usable
+async function requestModelJson(prompt, options, validate, attempts = 3) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+            const responseText = await sendRequestToGemini(prompt, options);
+            if (!responseText) throw new Error('AI response is empty');
+            const parsed = parseModelJson(responseText);
+            if (validate && !validate(parsed)) throw new Error('AI response has an unexpected shape');
+            return parsed;
+        } catch (error) {
+            lastError = error;
+            console.error(`Model JSON request failed (attempt ${attempt}/${attempts}):`, error.message);
+        }
+    }
+    throw lastError;
+}
+
+// Keep only links that point at a real component and a real intent, with exact ids and names
+function cleanLinks(links, componentList, intents) {
+    if (!Array.isArray(links)) return [];
+    const componentIds = new Map();
+    componentList.forEach(component => {
+        componentIds.set(normalizeName(component.id), component.id);
+        if (component.title) componentIds.set(normalizeName(component.title), component.id);
+    });
+    const dimensions = new Map(intents.map(intent => [normalizeName(intent.dimension), intent.dimension]));
+    const seen = new Set();
+    const cleaned = [];
+    links.forEach(link => {
+        if (!link || !link.component_id || !link.intent_dimension) return;
+        const componentId = componentIds.get(normalizeName(link.component_id));
+        const dimension = dimensions.get(normalizeName(link.intent_dimension));
+        if (!componentId || !dimension || seen.has(`${componentId}|${dimension}`)) return;
+        seen.add(`${componentId}|${dimension}`);
+        cleaned.push({ intent_dimension: dimension, component_id: componentId });
+    });
+    return cleaned;
+}
+
+// Make sure every component has at least one intent: ask the model again for the components it left out,
+// then fall back to the most widely used intent for any that are still missing
+async function ensureEveryComponentLinked(links, componentList, intents) {
+    if (intents.length === 0) return links;
+    const missing = () => componentList.filter(component => !links.some(link => link.component_id === component.id));
+
+    if (missing().length > 0) {
+        const prompt = `You are an AI assistant specializing in email communication strategy.
+
+Each email component below must be linked to the writing intents that most influence how it is written.
+
+Components:
+${JSON.stringify(missing(), null, 2)}
+
+Intents:
+${JSON.stringify(intents.map(intent => ({ dimension: intent.dimension, current_value: intent.current_value })), null, 2)}
+
+For EVERY component, choose the 1 or 2 intents whose strategy most affects that component's wording. Every component must appear at least once. Use the exact "id" of the component and the exact "dimension" of the intent.
+
+Return ONLY a JSON array, with no commentary:
+[{"intent_dimension": "...", "component_id": "..."}]`;
+        try {
+            const extra = await requestModelJson(prompt, {}, Array.isArray, 2);
+            links = cleanLinks([...links, ...extra], componentList, intents);
+        } catch (error) {
+            console.error('Could not link the remaining components:', error.message);
+        }
+    }
+
+    const stillMissing = missing();
+    if (stillMissing.length > 0) {
+        const counts = new Map(intents.map(intent => [intent.dimension, 0]));
+        links.forEach(link => counts.set(link.intent_dimension, (counts.get(link.intent_dimension) || 0) + 1));
+        const fallback = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        stillMissing.forEach(component => links.push({ intent_dimension: fallback, component_id: component.id }));
+    }
+    return links;
+}
+
+const isIntentList = (data) => Array.isArray(data) && data.length > 0 && data.every(intent =>
+    intent && typeof intent.dimension === 'string' && intent.dimension.trim() &&
+    typeof intent.current_value === 'string' && intent.current_value.trim());
 
 function alignVariationValues(parsedData, intentSelected) {
     const variations = parsedData?.component_variations;
@@ -1454,25 +1551,17 @@ app.post('/intent-analyzer-new', async (req, res) => {
         .replace('{{DRAFT_LATEST}}', latestDraft);
 
     try {
-        const responseText = await sendRequestToGemini(prompt, { enableThinking: false });
-
-        if (!responseText) {
-            return res.status(500).json({ error: 'AI response is empty' });
-        }
-
-        console.log('Raw AI Response:', responseText);
-
-        // Sanitize the response to extract valid JSON
-        const sanitizedResponse = responseText.replace(/```json|```/g, '').trim();
-
-        // Parse the sanitized response
         let parsedData;
         try {
-            parsedData = JSON.parse(sanitizedResponse);
+            parsedData = await requestModelJson(prompt, { enableThinking: false }, isIntentList);
         } catch (error) {
-            console.error('Failed to parse sanitized response as JSON:', sanitizedResponse, error);
+            console.error('Failed to get intents as JSON:', error);
             return res.status(500).json({ error: 'Failed to parse AI response as JSON' });
         }
+        parsedData = parsedData.map(intent => ({
+            ...intent,
+            other_values: Array.isArray(intent.other_values) ? intent.other_values.filter(value => typeof value === 'string' && value.trim()) : []
+        }));
 
         // Ensure the intents directory exists
         const intentsDir = path.dirname(intentsPath);
@@ -1650,17 +1739,17 @@ app.post('/component-intent-link', async (req, res) => {
         .replace('{{INTENT_CURRENT}}', intentCurrent);
 
     try {
-        const responseText = await sendRequestToGemini(prompt);
-
-        if (!responseText) {
-            return res.status(500).json({ error: 'AI response is empty' });
+        const intents = JSON.parse(intentCurrent);
+        let links = [];
+        try {
+            links = await requestModelJson(prompt, {}, Array.isArray, 2);
+        } catch (error) {
+            console.error('Component-Intent Link output could not be parsed:', error.message);
         }
-
-        console.log('Component-Intent Link Output:', responseText);
-        const sanitizedResponse = responseText.replace(/```json|```/g, '').trim();
-        console.log('Component-Intent Link Output:', sanitizedResponse);
-        const links = JSON.parse(sanitizedResponse);
-        res.json({ links: ollamaModel ? alignLinkDimensions(links, JSON.parse(intentCurrent)) : links });
+        links = cleanLinks(links, componentList, intents);
+        links = await ensureEveryComponentLinked(links, componentList, intents);
+        console.log('Component-Intent Link Output:', JSON.stringify(links, null, 2));
+        res.json({ links });
     } catch (error) {
         console.error('Error in Component-Intent Link:', error);
         res.status(500).json({ error: 'Error in Component-Intent Link' });
@@ -1846,6 +1935,43 @@ app.post('/ai-generate-rewrite', async (req, res) => {
     } catch (error) {
         console.error('Error in AI generate rewrite:', error);
         res.status(500).json({ error: 'Error generating rewrite: ' + error.message });
+    }
+});
+
+app.post('/ai-add-content', async (req, res) => {
+    const { userTask, userName, taskId, currentDraft, userPrompt } = req.body;
+
+    if (!userTask || !userName || !taskId || !currentDraft || !userPrompt) {
+        return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    try {
+        // Load the prompt template
+        const promptPath = path.join(__dirname, '../../public/data/Prompts/16add_content.prompt.md');
+        const promptTemplate = fs.readFileSync(promptPath, 'utf-8');
+
+        // Load factor choices
+        const factorChoicesPath = path.join(__dirname, '../data/SessionData', userName, taskId, 'factors', 'choices.json');
+        const factorChoices = fs.existsSync(factorChoicesPath) ? JSON.parse(fs.readFileSync(factorChoicesPath, 'utf-8')) : {};
+        const filteredFactorChoices = filterFactorChoices(factorChoices)
+        // Replace placeholders in the prompt (function replacements keep `$` in user text literal)
+        const prompt = promptTemplate
+            .replace('{{USER_TASK}}', () => userTask)
+            .replace('{{DRAFT_LATEST}}', () => currentDraft)
+            .replace('{{FACTOR_CHOICES}}', () => JSON.stringify(filteredFactorChoices, null, 2))
+            .replace('{{USER_PROMPT}}', () => userPrompt);
+
+        // Call Gemini API
+        const revisedDraft = await sendRequestToGemini(prompt);
+
+        if (!revisedDraft) {
+            return res.status(500).json({ error: 'AI response is empty' });
+        }
+
+        res.json({ revisedDraft: revisedDraft.trim() });
+    } catch (error) {
+        console.error('Error in AI add content:', error);
+        res.status(500).json({ error: 'Error adding content: ' + error.message });
     }
 });
 
