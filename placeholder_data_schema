@@ -1,0 +1,232 @@
+# Placeholder Dictionary and Data Schema
+
+## SessionData File Tree
+
+SessionData/
+├── <UserName>/                    # 具体用户名目录
+│   ├── anchors.json
+│   └── <TaskId>/                  # 具体任务ID目录
+│       ├── meta/
+│       │   └── task.json
+│       ├── factors/
+│       │   └── choices.json
+│       ├── intents/
+│       │   ├── current.json
+│       │   └── history.json
+│       ├── drafts/
+│       │   ├── 00_first.md
+│       │   ├── 01_regen.md
+│       │   └── latest.md
+│       ├── localized/
+│       │   ├── 001_variation.json
+│       │   └── 002_direct_rewrite.json
+│       └── logs/
+│           └── regen_01.json
+
+## Placeholder Dictionary
+
+| Placeholder Name | Description | Data Type/Schema Example | Source File(s)/Origin |
+|------------------|-------------|--------------------------|------------------------|
+| {{USER_TASK}} | The initial task description provided by the user. | String | meta/task.json → original_task |
+| {{TASK_ID}} | A unique identifier for the task. | String | meta/task.json → task_id |
+| {{FACTOR_LIST}} | Master list of all available tone/format factors. | Array of objects (see schema 2.3.1) | PredefinedData/factor_list.json |
+| {{FACTOR_CHOICES}} | User-selected factors and answers, including custom inputs. | JSON object | factors/choices.json |
+| {{INTENT_CURRENT}} | Current array of intent pairs {dimension, value}. Represents the current, updated, or previous intent state depending on the agent's context. | Array of objects | intents/current.json |
+| {{DRAFT_LATEST}} | The full content of the most recent email draft. | Markdown string | drafts/latest.md |
+| {{SELECTED_CONTENT}} | The specific text span chosen by the user for localized fine-tuning. | String | User selection from UI |
+| {{LOCALIZED_REVISED_CONTENT}} | The AI-generated or user edited revised version of {{SELECTED_CONTENT}}. | String | AI agent output |
+| {{USER_PROMPT}} | Free-form instruction from the user for AI editing tasks. | String | User input via UI |
+| {{SNIPPETS}} | A collection of concise email sentences reflecting chosen factors/options. | Array of objects (see schema 2.3.8) | Output of Snippet Generator agent |
+| {{ASPECTS_LIST_JSON}} | Master list of all nuanced aspects for email composition. | Array of objects (see schema 2.3.2) | PredefinedData/aspects_list.json |
+| {{ASPECTS_SELECTION_JSON}} | User's selection of aspects to "lock" and "revise" for a rewrite. | JSON object | User input via UI, saved with session data |
+| {{EDIT_ACTION}} | The original and revised text from a user's direct edit. | JSON object: {"before": "...", "after": "..."} | User input via UI |
+| {{VARIATION_OPTION}} | The specific variation phrasing selected by the user. | String | User selection from Variation Maker output |
+| {{USER_EDITED_CONTENT}} | The content of a text block after a user's direct manual edit. | String | User input via UI |
+| {{PERSONA_ANCHOR}} | The JSON object defining the user's persona. | JSON object | anchors.json → persona |
+| {{SITUATION_ANCHOR}} | The JSON object defining the task's situation. | JSON object | anchors.json → situation |
+
+## Data Schema
+
+### PredefinedData/factor_list.json
+
+```json
+[
+  {
+    "id": "relationship_type",
+    "title": "Relationship type",
+    "options": ["Supervisor and Student", "Friends and family", "Etc."]
+  }
+]
+```
+
+### factors/choices.json {{FACTOR_CHOICES}}
+
+```json
+{
+  "id": "relationship_type",
+  "title": "Relationship type",
+  "options": ["Supervisor and Student"]
+}
+```
+
+### PredefinedData/aspects_list.json
+
+```json
+{
+  "id": "tone",
+  "title": "Overall Tone",
+  "description": "The emotional flavor of the message (friendly, neutral, persuasive, apologetic, etc.)."
+}
+```
+
+### {{ASPECTS_SELECTION_JSON}}
+
+```json
+{
+  "lock": [
+    "aspect_id_1",
+    "aspect_id_2"
+  ],
+  "can be revised": [
+    "aspect_id_3",
+    "aspect_id_4"
+  ]
+}
+```
+
+### SessionData/\<TaskId\>/meta/task.json
+
+```json
+{
+  "user": "Rui",
+  "task_id": "Rui_20250604T1312",
+  "created_iso": "2025-06-04T13:12:00+08:00",
+  "original_task": "Write to Professor Lee asking for a deadline extension."
+}
+```
+
+### intents/current.json {{INTENT_CURRENT}}
+
+```json
+[
+  {
+    "dimension": "directness",
+    "value": "explicit"
+  },
+  {
+    "dimension": "urgency",
+    "value": "same-day"
+  },
+  {
+    "dimension": "formality",
+    "value": "neutral"
+  }
+]
+```
+
+### SessionData/\<TaskId\>/intents/history.json
+
+```json
+[
+  {
+    "ts": "2025-06-04T13:14:30+08:00",
+    "action": "initial-load",
+    "prev": null,
+    "next": { "dimension": "urgency", "value": "same-day" },
+    "source": "AI › IntentAnalyzer v1",
+    "actor": "AI"
+  },
+  {
+    "ts": "2025-06-04T13:27:10+08:00",
+    "action": "add",
+    "prev": null,
+    "next": { "dimension": "attachment", "value": "revised-plan" },
+    "source": "UserUI › manual add",
+    "actor": "user"
+  }
+]
+```
+
+### SessionData/\<TaskId\>/localized/NNN_\<agent\>.json
+
+#### Example: 001_variation.json
+
+```json
+{
+  "ts": "2025-06-04T13:25:47+08:00",
+  "agent": "VariationMaker",
+  "block_selector": "I am profoundly grateful for your time.",
+  "options_generated": [
+    "Thank you for considering this request.",
+    "I appreciate you taking the time to review this.",
+    "Thanks for your consideration."
+  ],
+  "option_selected": "Thank you for considering this request."
+}
+```
+
+#### Example: 002_direct_rewrite.json
+
+```json
+{
+  "ts": "2025-06-04T13:28:15+08:00",
+  "agent": "Direct-Rewrite",
+  "before": "I am writing to request an extension.",
+  "after": "I would like to formally request a brief extension."
+}
+```
+
+### Snippets Schema ({{SNIPPETS}})
+
+```json
+[
+  {
+    "factor": "Relationship type",
+    "option": "Supervisor and Student",
+    "snippet": "...given my position as your student, I wanted to formally request..."
+  },
+  {
+    "factor": "You want the receiver to feel you are",
+    "option": "Apology / Regret 😔",
+    "snippet": "...I sincerely apologize for any inconvenience this may cause..."
+  }
+]
+```
+
+### Persona and Situation Anchor (anchors.json)
+
+```json
+{
+  "persona": {
+    "title": "Collaborative Colleague",
+    "description": "A peer who values teamwork, open feedback, and shared professional goals. The tone should remain approachable and constructive."
+  },
+  "situation": {
+    "title": "Proposing a New Project Initiative",
+    "description": "The goal is to introduce a new idea for a project, outlining its potential benefits and seeking feedback or buy-in. The message should be persuasive yet open to discussion."
+  }
+}
+```
+
+### {{EDIT_ACTION}}
+
+```json
+{ 
+  "before": "...", 
+  "after": "..." 
+}
+```
+
+### Placeholders with Simple Data Types
+
+These placeholders are defined as primitive data types (like strings) and therefore do not have a complex, structured schema in the "Data Schema" list.
+
+| Placeholder Name | Data Type | Source File(s)/Origin |
+|------------------|-----------|----------------------|
+| {{DRAFT_LATEST}} | Markdown string | drafts/latest.md |
+| {{SELECTED_CONTENT}} | String | User selection from UI |
+| {{LOCALIZED_REVISED_CONTENT}} | String | AI agent output |
+| {{USER_PROMPT}} | String | User input via UI |
+| {{VARIATION_OPTION}} | String | User selection from Variation Maker output |
+| {{USER_EDITED_CONTENT}} | String | User input via UI |
+

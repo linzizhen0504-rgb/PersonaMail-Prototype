@@ -1,0 +1,86 @@
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+.demo-logo-vertical{
+  margin-top: 16px;
+  font-size: 20px;
+  font-style: normal;
+  font-weight: 700;
+}
+.demo-logo-vertical img{
+  width: 32px;
+  height: 32px;
+}
+.firstPage-content{
+  width: 80%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.firstPage-content-text{
+  text-align: center;
+font-family: "IBM Plex Mono";
+font-size: 28px;
+font-style: normal;
+font-weight: 400;
+line-height: 70px;
+}
+.firstPage-content-text-sub{
+  text-align: center;
+  font-family: "IBM Plex Mono";
+  font-size: 48px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 28px;
+}
+.cs-message-input__content-editor-wrapper{
+  width: 100%;
+  height: 100%;
+  border-radius: 48px;
+}
+.cs-message-input{
+  padding: 0px 16px 24px 16px !important; 
+  min-height: 130px !important;
+}
+.cs-message-input__content-editor-wrapper{
+  padding: 8px 0px 8px 16px !important; 
+  text-align: left;
+}
+.cs-message-input__content-editor{
+  background-color: #ffffff !important;
+}
+.ChatMessage_User_Content_Label{
+  margin-bottom: 8px;
+} 
+.ChatMessage_User_Content_Text{
+  display: flex;
+  padding: 12px;
+  align-items: flex-start;
+  gap: 10px;
+  align-self: stretch;
+  border-radius: 24px;
+  border: 1px solid #E2E8F0;
+  background: #FFF;
+}
+
+.ChatMessage_Assistant_Content_Text{
+  display: flex;
+  padding: 12px;
+  align-items: flex-start;
+  gap: 10px;
+  align-self: stretch;
+  border-radius: 24px;
+  border: 1px solid #E2E8F0;
+  background: #FFF;
+}

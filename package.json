@@ -1,0 +1,78 @@
+{
+  "name": "chatbot-app",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@ant-design/icons": "^5.6.1",
+    "@chatscope/chat-ui-kit-react": "^2.0.3",
+    "@craco/craco": "^7.1.0",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^13.5.0",
+    "agentkeepalive": "^4.6.0",
+    "antd": "^5.24.7",
+    "assert": "^2.1.0",
+    "axios": "^1.8.1",
+    "axios-socks5-agent": "^1.0.5",
+    "browserify-zlib": "^0.2.0",
+    "buffer": "^6.0.3",
+    "cors": "^2.8.5",
+    "crypto-browserify": "^3.12.1",
+    "express": "^4.21.2",
+    "https-proxy-agent": "^7.0.6",
+    "openai": "^4.86.1",
+    "path-browserify": "^1.0.1",
+    "process": "^0.11.10",
+    "proxy-agent": "^6.5.0",
+    "querystring-es3": "^0.2.1",
+    "react": "^18.2.0",
+    "react-dnd": "^16.0.1",
+    "react-dnd-html5-backend": "^16.0.1",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.2.0",
+    "react-scripts": "^5.0.1",
+    "slate": "^0.117.0",
+    "slate-react": "^0.117.1",
+    "socks-proxy-agent": "^8.0.5",
+    "stream-browserify": "^3.0.0",
+    "stream-http": "^3.2.0",
+    "url": "^0.11.4",
+    "util": "^0.12.5",
+    "vm-browserify": "^1.1.2",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "react-app-rewired start",
+    "build": "react-app-rewired build",
+    "test": "react-app-rewired test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "description": "This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).",
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "raw-loader": "^4.0.2",
+    "react-app-rewired": "^2.2.1"
+  }
+}
