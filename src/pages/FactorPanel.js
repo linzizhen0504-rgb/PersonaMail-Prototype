@@ -715,9 +715,7 @@ const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGe
     return (
         <div className="factor-panel factor-panel-sidebar" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '16px' }}>
-                <div style={{ fontSize: '13px', color: '#666', marginBottom: '6px' }}>
-                    Your request — the email is drafted from it and the options below.
-                </div>
+                <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#333', marginBottom: '6px' }}>Request</div>
                 <div className="ChatMessage_Assistant_Content_Text factor-panel-task" style={{ maxHeight: '140px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                     {userTask}
                 </div>

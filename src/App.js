@@ -1,14 +1,13 @@
 // src/App.js
 import React, { useState, createContext, useContext, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import { EditOutlined } from '@ant-design/icons';
-import { Layout, theme, Input, Button, Space, message } from 'antd';
+import { EditOutlined, LogoutOutlined } from '@ant-design/icons';
+import { Layout, theme, Input, Button, Space, Dropdown, message } from 'antd';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom';
 import EmailEditorPage from './pages/EmailEditor';
 import 'antd/dist/reset.css';
 import './App.css'; // 引入自定义CSS文件
-import logoImg from './Logo.png'; // 引入图片
-import avatarImg from './avatarUser.png'; // 引入图片
+import { LogoIcon, UserAvatarIcon } from './icons';
 
 const { Header, Content } = Layout;
 
@@ -143,39 +142,43 @@ const App = () => {
   return (
     <GlobalContext.Provider value={{ globalState, setGlobalState: () => {} }}>
       <Layout style={{ minHeight: '100vh' }}>
-          <Header style={{ paddingLeft: 0, background: colorBgContainer, display: 'flex', alignItems: 'center' }}>
-            <img src={logoImg} alt="logo" style={{ width: '32px', marginLeft: '24px' }} />
-            <span style={{ marginLeft: '12px', fontWeight: 500 }}>Persona Mail</span>
-            <div style={{ marginLeft: 'auto', marginRight: '24px', display: 'flex', alignItems: 'center', gap: '8px', width: '280px' }}>
-              <img src={avatarImg} alt="avatar" style={{ width: '32px', height: '32px', borderRadius: '50%' }} />
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
-                {username ? (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                    <span style={{ color: '#1890ff', fontWeight: 500, fontSize: '14px' }}>
-                      {username}
-                    </span>
-                    <Button
-                      size="small"
-                      onClick={handleNewTask}
-                      title="Start a new email task"
-                      style={{ marginLeft: 'auto', marginRight: '4px', fontSize: '12px' }}
-                      disabled={isLoading}
-                    >
-                      New Task
-                    </Button>
-                    <Button 
-                      type="text" 
-                      size="small" 
-                      onClick={handleUsernameReset}
-                      title="Reset username"
-                      style={{ padding: '0 4px', fontSize: '12px', opacity: 0.6 }}
-                      disabled={isLoading}
-                    >
-                      ×
-                    </Button>
-                  </div>
-                ) : (
-                  <Space.Compact style={{ width: '100%' }}>
+          <Header style={{ paddingLeft: 0, background: colorBgContainer, display: 'flex', alignItems: 'center', lineHeight: 1 }}>
+            <LogoIcon size={36} style={{ marginLeft: '20px' }} />
+            <span style={{ marginLeft: '8px', fontWeight: 500 }}>Persona Mail</span>
+            <div style={{ marginLeft: 'auto', marginRight: '24px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+              {username ? (
+                <>
+                  <Button
+                    size="small"
+                    onClick={handleNewTask}
+                    title="Start a new email task"
+                    style={{ fontSize: '12px' }}
+                    disabled={isLoading}
+                  >
+                    New Task
+                  </Button>
+                  <Dropdown
+                    trigger={['click']}
+                    placement="bottomRight"
+                    menu={{
+                      items: [{ key: 'logout', icon: <LogoutOutlined />, label: 'Log out' }],
+                      onClick: ({ key }) => {
+                        if (key === 'logout') handleUsernameReset();
+                      },
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }} title="Account">
+                      <UserAvatarIcon size={32} />
+                      <span style={{ color: '#1890ff', fontWeight: 500, fontSize: '14px', lineHeight: 1 }}>
+                        {username}
+                      </span>
+                    </div>
+                  </Dropdown>
+                </>
+              ) : (
+                <>
+                  <UserAvatarIcon size={32} />
+                  <Space.Compact style={{ width: '220px' }}>
                     <Input
                       placeholder="Enter username"
                       value={inputValue}
@@ -192,8 +195,8 @@ const App = () => {
                       loading={isLoading}
                     />
                   </Space.Compact>
-                )}
-              </div>
+                </>
+              )}
             </div>
           </Header>
           <Content>

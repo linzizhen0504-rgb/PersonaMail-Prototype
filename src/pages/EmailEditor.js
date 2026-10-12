@@ -7,8 +7,7 @@ import { SendOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
 import stylebookSVG from '../stylebook.svg';
 import FactorPanel, { useFactorSelection } from './FactorPanel';
-import avatarImg from '../Avatar.png';
-import avatarImg_u from '../avatarUser.png';
+import { RobotIcon, UserAvatarIcon, BotAvatarIcon } from '../icons';
 
 const { Title } = Typography;
 
@@ -2776,6 +2775,18 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     
     // Track dimension-to-color mapping to prevent duplicates
     const dimensionColorMapRef = useRef(new Map());
+
+    // Keep each intent's options in the order they were first shown, so selecting one does not move it
+    const intentOptionOrderRef = useRef(new Map());
+    const getIntentOptions = (intent) => {
+        const values = [intent.current_value, ...intent.other_values];
+        const saved = intentOptionOrderRef.current.get(intent.dimension);
+        if (saved && saved.length === values.length && values.every(value => saved.includes(value))) {
+            return saved;
+        }
+        intentOptionOrderRef.current.set(intent.dimension, values);
+        return values;
+    };
     
     // Helper function to get unique dimension color from palette
     const getDimensionColor = (dimension) => {
@@ -3378,16 +3389,19 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             <div className="firstPage">
                 <div style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh - 112px', backgroundColor: '#F8FAFC' }}>
                     <div className="firstPage-content" style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', position: 'absolute', top: '50%', transform: 'translateY(-50%)' }}>
-                        <p className="firstPage-content-text">🤖Hi, I am email writing assistant.</p>
+                        <p className="firstPage-content-text" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}><RobotIcon /><span>Hi, I am email writing assistant.</span></p>
                         <p className="firstPage-content-text-sub">What can I help with?</p>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', width: '100%' }}>
+                          {/* Spacer as wide as the send button, so the input box itself sits in the centre */}
+                          <div style={{ width: '40px', flexShrink: 0 }} />
                           <Input.TextArea
                             value={taskInput}
                             onChange={e => setTaskInput(e.target.value)}
                             placeholder="Please input your Email task here..."
                             autoSize={{ minRows: 2, maxRows: 6 }}
                             style={{
-                              width: '90%',
+                              flex: 1,
+                              minWidth: 0,
                               minHeight: '82px',
                               borderRadius: '48px',
                               border: '2px solid var(--Color-2, #475569)',
@@ -3416,7 +3430,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             <div className="firstPage" style={{ height: 'calc(100vh - 64px)' }}>
                         <div className="chatContainer" style={{ padding: '24px 24px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', height: '100vh - 112px' }}>
                             <div className="ChatMessage_User" style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '16px' }}>
-                                <img src={avatarImg_u} alt="avatar" style={{ marginRight: '8px', width: '40px', height: '40px' }} />
+                                <UserAvatarIcon size={40} style={{ marginRight: '8px' }} />
                                 <div className="ChatMessage_User_Content">
                                     <p className="ChatMessage_User_Content_Label" style={{ color: '#000', fontSize: '16px', fontWeight: 'bold' }}>You</p>
                                     <div className="ChatMessage_User_Content_Text">
@@ -3425,7 +3439,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                 </div>
                             </div>
                             <div className="ChatMessage_Assistant" style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '16px', width: '100%' }}>
-                                <img src={avatarImg} alt="avatar" style={{ marginRight: '8px', alignSelf: 'flex-start' }} />
+                                <BotAvatarIcon size={40} style={{ marginRight: '8px', alignSelf: 'flex-start' }} />
                                 <div className="ChatMessage_Assistant_Content" style={{ flex: 1, minWidth: 0 }}>
                                 <p className="ChatMessage_User_Content_Label" style={{ color: '#000', fontSize: '16px', fontWeight: 'bold' }}>PersonaMail Bot</p>
                                     <FactorPanel
@@ -3867,13 +3881,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                                         e.stopPropagation();
                                                     }}
                                                 >
-                                                    <Radio 
-                                                        value={intent.current_value}
-                                                        style={{ fontSize: '13px' }}
-                                                    >
-                                                        {intent.current_value}
-                                                    </Radio>
-                                                    {intent.other_values.map((value, index) => (
+                                                    {getIntentOptions(intent).map((value, index) => (
                                                         <Radio 
                                                             key={index} 
                                                             value={value}
