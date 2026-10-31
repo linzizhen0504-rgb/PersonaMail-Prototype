@@ -1,4 +1,4 @@
-"""Preference model: Dirichlet-multinomial over [pick, edit, reject] per intent value, with an
+"""Preference model: a Beta-Bernoulli bandit per intent value (counts = [accept, reject]), with an
 empirical-Bayes prior borrowed from semantically similar values, MMR diversification and
 randomised ordering."""
 import re
@@ -8,7 +8,12 @@ import numpy as np
 import config
 from embedding import cosine
 
-PICK, EDIT, REJECT = 0, 1, 2
+ACCEPT, REJECT = 0, 1
+
+# Older logs used 'edit' for a use followed by editing and 'reject_all' for regenerating
+LEGACY_EVENTS = {"edit": "pick", "reject_all": "regenerate"}
+CHOSEN_EVENTS = {"pick"}
+UNCHOSEN_EVENTS = {"regenerate", "leave"}
 
 
 def normalize(text):
@@ -21,16 +26,23 @@ def text_for(dimension, value):
     return f"{dimension}: {value}"
 
 
+def canonical_event(event):
+    return LEGACY_EVENTS.get(event, event)
+
+
 def event_increments(event, chosen_value, shown_values):
-    """The count rules shared by /update and build_priors.py: [(value, index into [pick, edit, reject])]."""
+    """The count rules shared by /update and build_priors.py:
+    [(value, index into [accept, reject])]. pick: the chosen value is accepted and every other
+    shown value rejected; regenerate / leave: every shown value is rejected."""
+    event = canonical_event(event)
     shown = list(shown_values or [])
-    chosen_key = normalize(chosen_value)
-    others = [v for v in shown if normalize(v) != chosen_key]
     if event == "pick":
-        return [(chosen_value, PICK)] + [(v, REJECT) for v in others]
-    if event == "edit":
-        return [(chosen_value, EDIT)] + [(v, REJECT) for v in others]
-    if event == "reject_all":
+        if not chosen_value:
+            return []
+        chosen_key = normalize(chosen_value)
+        others = [v for v in shown if normalize(v) != chosen_key]
+        return [(chosen_value, ACCEPT)] + [(v, REJECT) for v in others]
+    if event in UNCHOSEN_EVENTS:
         return [(v, REJECT) for v in shown]
     return []
 
@@ -89,7 +101,7 @@ class PreferenceModel:
         candidates.sort(key=lambda item: item[0], reverse=True)
         candidates = candidates[: self.cfg["max_refs"]]
 
-        prior = np.ones(3)
+        prior = np.ones(2)
         for similarity, _, record in candidates:
             prior = prior + similarity * np.asarray(record["counts"], dtype=float)
         total = prior.sum()
@@ -114,8 +126,7 @@ class PreferenceModel:
     def sample_scores(self, params_list):
         scores = []
         for params in params_list:
-            theta = self.rng.dirichlet(params)
-            scores.append(float(theta[PICK] + 0.5 * theta[EDIT]))
+            scores.append(float(self.rng.beta(params[ACCEPT], params[REJECT])))
         return scores
 
     def mmr_select(self, scores, embeddings, k):
@@ -175,6 +186,7 @@ class PreferenceModel:
 
     # ----- updates -----
     def update(self, pid, context, dimension, event, chosen_value, shown_values):
+        event = canonical_event(event)
         increments = event_increments(event, chosen_value, shown_values)
         if not increments:
             return {"updated": False, "counts": {}, "tally": None}
@@ -191,7 +203,7 @@ class PreferenceModel:
                     record = {
                         "pid": pid, "context": context, "intent_dimension": dimension, "value": value,
                         "embedding": [float(x) for x in self.embedder.embed(text_for(dimension, value))],
-                        "counts": [0, 0, 0], "prior": prior,
+                        "counts": [0, 0], "prior": prior,
                     }
                     counts["records"].append(record)
                 touched[normalize(value)] = record
@@ -203,7 +215,7 @@ class PreferenceModel:
                 tally = {"pid": pid, "context": context, "intent_dimension": dimension,
                          "reject_all_shows": 0, "chosen_shows": 0}
                 counts["shows"].append(tally)
-            tally["reject_all_shows" if event == "reject_all" else "chosen_shows"] += 1
+            tally["chosen_shows" if event in CHOSEN_EVENTS else "reject_all_shows"] += 1
             self.store.save_counts(counts)
 
         return {
@@ -220,7 +232,8 @@ class PreferenceModel:
         return None
 
     def reject_check(self, pid, context, dimension):
-        """Posterior mean of 'a display ends in reject_all' over this and similar dimensions."""
+        """Posterior mean of 'a display ends without a pick' over this and similar dimensions.
+        (Tally keys keep their old names: chosen_shows = displays with a pick, reject_all_shows = without.)"""
         with self.store.lock:
             counts = self.store.load_counts()
         query = self.embedder.embed(dimension)

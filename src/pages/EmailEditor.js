@@ -4,7 +4,7 @@ import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
 import { Card, Typography, message, Button, Row, Col, Tooltip, Tag, Radio, Checkbox, Flex, Modal, Input, Spin } from 'antd';
 import axios from 'axios';
 import { diffWords } from 'diff';
-import { SendOutlined, LeftOutlined, RightOutlined, CloseOutlined } from '@ant-design/icons';
+import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
 import stylebookSVG from '../stylebook.svg';
 import FactorPanel, { useFactorSelection } from './FactorPanel';
@@ -52,8 +52,6 @@ const callModel = (path, payload) => axios.post(`${MODEL_SERVICE_URL}${path}`, p
 const POWER_FACTOR_ID = 'power_difference';
 let logContext = 'unknown';
 
-const REJECT_NOTICE = 'All versions rejected. The text is unchanged.';
-const REGENERATED_NOTICE = 'New options generated for this intent. Click it again to see them.';
 
 // Append one experiment event to src/data/logs/{pid}.jsonl through the backend
 const logEvent = (fields) => {
@@ -285,7 +283,6 @@ const EmailEditor = () => {
     const cardsRef = useRef(null);
     const [notice, setNotice] = useState(null);
     const versionCardsRef = useRef(null);
-    const [editingUnitId, setEditingUnitId] = useState(null);
     const cardsRequestIdRef = useRef(0);
     const previewSessionRef = useRef(null);
     const editWatchRef = useRef(null);
@@ -2972,16 +2969,23 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     <div className='versionCards' ref={versionCardsRef}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <div style={{ color: '#8a9099', fontSize: '13px' }}>
-                                {cardsState.loading || cardsState.error
+                                {cardsState.loading || cardsState.error || cardsState.regenerating
                                     ? `Versions for ${cardsState.dimension} (current: ${cardsState.currentValue})`
                                     : `${cardsState.items.length} versions for ${cardsState.dimension} (current: ${cardsState.currentValue})`}
                             </div>
-                            <Button size="small" icon={<CloseOutlined />} onClick={handleRejectAll}>Reject all</Button>
+                            <Button
+                                size="small"
+                                icon={<ReloadOutlined />}
+                                onClick={handleRegenerate}
+                                disabled={cardsState.loading || cardsState.error || cardsState.regenerating}
+                            >
+                                Regenerate
+                            </Button>
                         </div>
-                        {cardsState.loading ? (
+                        {cardsState.loading || cardsState.regenerating ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#666', fontSize: '14px', padding: '16px 0' }}>
                                 <Spin size="small" />
-                                <span>Generating versions…</span>
+                                <span>{cardsState.regenerating ? 'Generating new versions…' : 'Generating versions…'}</span>
                             </div>
                         ) : cardsState.error ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#b42318', fontSize: '14px', padding: '16px 0' }}>
@@ -2990,6 +2994,11 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                             </div>
                         ) : (
                             <>
+                                {cardsState.regenError && (
+                                    <div style={{ color: '#b42318', fontSize: '14px', marginBottom: '8px' }}>
+                                        Couldn't generate new versions. Try again.
+                                    </div>
+                                )}
                                 <div className='vc-grid'>
                                     {cardsState.items.map((item) => (
                                         <div key={item.value} className='vc-card'>
@@ -3003,10 +3012,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                                     <span key={index} style={part.removed ? diffRemoved : part.added ? diffAdded : undefined}>{part.value}</span>
                                                 ))}
                                             </div>
-                                            <div style={{ display: 'flex', gap: '8px' }}>
-                                                <Button type="primary" style={{ flex: 1 }} onClick={() => handleCardUse(item, false)}>Use</Button>
-                                                <Button style={{ flex: 1 }} onClick={() => handleCardUse(item, true)}>Use and edit</Button>
-                                            </div>
+                                            <Button type="primary" block onClick={() => handleCardUse(item)}>Use</Button>
                                         </div>
                                     ))}
                                 </div>
@@ -3061,10 +3067,9 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             
             // 根据是否高亮设置不同的文本样式
             const isCards = EXPERIMENT.cond === 'cards';
-            const isEditingUnit = isCards && editingUnitId && leaf.componentId === editingUnitId;
             const textStyle = isHighlighted && isCards ? {
-                backgroundColor: isEditingUnit ? '#ffffff' : '#fff3c4',
-                border: `2px solid ${isEditingUnit ? '#2f6fde' : '#f2c94c'}`,
+                backgroundColor: '#fff3c4',
+                border: '2px solid #f2c94c',
                 borderRadius: '4px',
                 padding: '1px 2px',
                 cursor: 'pointer'
@@ -3387,20 +3392,51 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         message.info('Modification cancelled');
     };
 
+    // cards: tell the preference model how a display ended (once per display)
+    const sendModelUpdate = (cards, event, chosenValue) => callModel('/update', {
+        pid: EXPERIMENT.pid,
+        context: cards.context,
+        intent_dimension: cards.dimension,
+        event,
+        chosen_value: chosenValue,
+        shown_values: cards.items.map(i => i.value)
+    }).catch((updateError) => {
+        console.warn('Preference model unavailable for /update:', updateError.message);
+        logEvent({
+            unit_id: cards.unitId,
+            unit_title: cards.unitTitle,
+            intent_dimension: cards.dimension,
+            event: 'model_unavailable',
+            endpoint: 'update'
+        });
+        throw updateError;
+    });
+
+    // cards: a display ends exactly once, as pick, regenerate or leave. The event is logged and the model
+    // is updated with the same event. Returns the /update promise (rejects if the model is unavailable).
+    const endDisplay = (cards, event, extra = {}) => {
+        if (!cards || cards.ended) return null;
+        cards.ended = true;
+        logEvent({
+            unit_id: cards.unitId,
+            unit_title: cards.unitTitle,
+            intent_dimension: cards.dimension,
+            event,
+            shown_values: cards.items.map(item => item.value),
+            positions: cards.items.map((item, index) => index + 1),
+            duration_ms: Date.now() - cards.shownAt,
+            ...extra
+        });
+        return sendModelUpdate(cards, event, extra.chosen_value || null);
+    };
+
     // Log a leave when a preview (baseline) or cards (cards) were shown but the user moved on without acting
     const flushLeave = () => {
         if (EXPERIMENT.cond === 'cards') {
             const cards = cardsRef.current;
-            if (cards && !cards.loading && cards.items.length > 0) {
-                logEvent({
-                    unit_id: cards.unitId,
-                    unit_title: cards.unitTitle,
-                    intent_dimension: cards.dimension,
-                    event: 'leave',
-                    shown_values: cards.items.map(item => item.value),
-                    positions: cards.items.map((item, index) => index + 1),
-                    duration_ms: Date.now() - cards.shownAt
-                });
+            if (cards && !cards.loading && !cards.error && cards.items.length > 0 && !cards.ended) {
+                const update = endDisplay(cards, 'leave');
+                if (update) update.catch(() => {});
             }
             cardsRef.current = null;
             cardsRequestIdRef.current += 1;
@@ -3428,9 +3464,27 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         if ((cardsUnit && cardsUnit !== selectedComponentId) || (sessionUnit && sessionUnit !== selectedComponentId)) {
             flushLeave();
         }
+        if (editWatchRef.current && editWatchRef.current.unitId !== selectedComponentId) {
+            finishEditWatch();
+        }
         setNotice(null);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedComponentId]);
+
+    // cards: clicking one of the top buttons while cards are showing counts as leaving. The listener runs in the
+    // capture phase, so the leave is logged before the button's own handler changes anything.
+    useEffect(() => {
+        if (EXPERIMENT.cond !== 'cards') return undefined;
+        const leaveButtons = ['Regenerate Draft', 'Save Draft', 'Generate Components', 'Reset Editor', 'New Task'];
+        const handleClick = (event) => {
+            const button = event.target && event.target.closest ? event.target.closest('button') : null;
+            if (!button || !leaveButtons.includes((button.innerText || '').trim())) return;
+            if (cardsRef.current) flushLeave();
+        };
+        document.addEventListener('click', handleClick, true);
+        return () => document.removeEventListener('click', handleClick, true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Keep the version cards (and their buttons) in view inside the scrollable Intents area
     useEffect(() => {
@@ -3443,6 +3497,96 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     const getUnitNodeText = (unitId, editorValue) => {
         const node = (editorValue || []).find(n => Array.isArray(n.children) && n.children.some(child => child && child.componentId === unitId));
         return node ? getNodeText(null, node) : null;
+    };
+
+    // cards: ask the rewriter for the version of the unit under every value of the intent, without the current value
+    const fetchVersions = async (unit, intent) => {
+        const intentOthers = (unit.linkedIntents || [])
+            .filter(other => other.dimension !== intent.dimension)
+            .map(other => ({ dimension: other.dimension, current_value: other.current_value }));
+        const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
+            userName: globalUsername,
+            taskId: globalTaskId,
+            userTask,
+            draftLatest: originalTextRef.current,
+            componentCurrent: unit.content,
+            intentSelected: {
+                dimension: intent.dimension,
+                current_value: intent.current_value,
+                other_values: intent.other_values
+            },
+            intentOthers
+        });
+        const variations = response.data && response.data.component_variations;
+        if (!Array.isArray(variations)) throw new Error('No versions returned');
+        const seenValues = new Set();
+        return variations.filter(v => {
+            if (!v || v.intent_value === intent.current_value || typeof v.content !== 'string' || seenValues.has(v.intent_value)) return false;
+            seenValues.add(v.intent_value);
+            return true;
+        });
+    };
+
+    // cards: rank the candidates with the preference model (random order if it is unavailable), show the
+    // top 3 as cards and log cards_shown. Returns the display, 'empty' when there is nothing to show, or null
+    // when the user moved on in the meantime.
+    const showDisplay = async ({ unit, unitTitle, intent, candidates, trigger, requestId }) => {
+        const context = logContext;
+        let chosenVersions;
+        let ordering;
+        let mmrUsed;
+        try {
+            const ranked = await callModel('/rank', {
+                pid: EXPERIMENT.pid,
+                context,
+                intent_dimension: intent.dimension,
+                candidates: candidates.map(v => ({ value: v.intent_value, text: v.content })),
+                k: 3
+            });
+            const byValue = new Map(candidates.map(v => [v.intent_value, v]));
+            chosenVersions = ((ranked.data && ranked.data.values) || []).map(name => byValue.get(name)).filter(Boolean);
+            if (candidates.length > 0 && chosenVersions.length === 0) throw new Error('empty ranking');
+            ordering = ranked.data.ordering;
+            mmrUsed = !!ranked.data.mmr_used;
+        } catch (rankError) {
+            console.warn('Preference model unavailable for /rank:', rankError.message);
+            logEvent({
+                unit_id: unit.id,
+                unit_title: unitTitle,
+                intent_dimension: intent.dimension,
+                event: 'model_unavailable',
+                endpoint: 'rank'
+            });
+            chosenVersions = shuffle(candidates).slice(0, 3);
+            ordering = 'fallback_random';
+            mmrUsed = false;
+        }
+        if (cardsRequestIdRef.current !== requestId) return null; // user already moved on
+        const items = chosenVersions.map(v => ({
+            value: v.intent_value,
+            content: v.content,
+            parts: diffWords(unit.content, v.content)
+        }));
+        if (items.length === 0) return 'empty';
+        const display = {
+            unitId: unit.id, unitTitle, dimension: intent.dimension, currentValue: intent.current_value, context,
+            items, ordering, mmrUsed, trigger,
+            loading: false, error: false, regenerating: false, regenError: false, ended: false, shownAt: Date.now()
+        };
+        cardsRef.current = display;
+        setCardsState(display);
+        logEvent({
+            unit_id: display.unitId,
+            unit_title: display.unitTitle,
+            intent_dimension: display.dimension,
+            event: 'cards_shown',
+            shown_values: items.map(item => item.value),
+            positions: items.map((item, index) => index + 1),
+            ordering,
+            mmr_used: mmrUsed,
+            trigger
+        });
+        return display;
     };
 
     // cards: an intent dimension was selected, fetch the rewritten versions of every value
@@ -3458,109 +3602,37 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         const unitTitle = unit.title || (components.find(c => c.id === selectedComponentId) || {}).title || null;
         const requestId = cardsRequestIdRef.current + 1;
         cardsRequestIdRef.current = requestId;
-        const loadingState = { unitId: selectedComponentId, unitTitle, dimension: intent.dimension, currentValue: intent.current_value, items: [], loading: true, error: false, shownAt: null };
+        const loadingState = {
+            unitId: selectedComponentId, unitTitle, dimension: intent.dimension, currentValue: intent.current_value,
+            items: [], loading: true, error: false, regenerating: false, regenError: false, ended: false, shownAt: null
+        };
         cardsRef.current = loadingState;
         setCardsState(loadingState);
 
+        const showError = () => {
+            if (cardsRequestIdRef.current !== requestId) return;
+            const failed = { ...loadingState, loading: false, error: true };
+            cardsRef.current = failed;
+            setCardsState(failed);
+        };
         try {
-            const intentOthers = unit.linkedIntents
-                .filter(other => other.dimension !== intent.dimension)
-                .map(other => ({ dimension: other.dimension, current_value: other.current_value }));
-            const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
-                userName: globalUsername,
-                taskId: globalTaskId,
-                userTask,
-                draftLatest: originalText,
-                componentCurrent: unit.content,
-                intentSelected: {
-                    dimension: intent.dimension,
-                    current_value: intent.current_value,
-                    other_values: intent.other_values
-                },
-                intentOthers
-            });
-            if (cardsRequestIdRef.current !== requestId) return; // user already moved on
-
-            const variations = (response.data && response.data.component_variations) || [];
-            // Never offer the version of the current value; every other version is a ranking candidate
-            const seenValues = new Set();
-            const candidates = variations.filter(v => {
-                if (!v || v.intent_value === intent.current_value || typeof v.content !== 'string' || seenValues.has(v.intent_value)) return false;
-                seenValues.add(v.intent_value);
-                return true;
-            });
-            const context = logContext;
-            let chosenVersions;
-            let ordering;
-            let mmrUsed;
-            try {
-                const ranked = await callModel('/rank', {
-                    pid: EXPERIMENT.pid,
-                    context,
-                    intent_dimension: intent.dimension,
-                    candidates: candidates.map(v => ({ value: v.intent_value, text: v.content })),
-                    k: 3
-                });
-                const byValue = new Map(candidates.map(v => [v.intent_value, v]));
-                chosenVersions = ((ranked.data && ranked.data.values) || []).map(name => byValue.get(name)).filter(Boolean);
-                if (candidates.length > 0 && chosenVersions.length === 0) throw new Error('empty ranking');
-                ordering = ranked.data.ordering;
-                mmrUsed = !!ranked.data.mmr_used;
-            } catch (rankError) {
-                console.warn('Preference model unavailable for /rank:', rankError.message);
-                logEvent({
-                    unit_id: loadingState.unitId,
-                    unit_title: loadingState.unitTitle,
-                    intent_dimension: intent.dimension,
-                    event: 'model_unavailable',
-                    endpoint: 'rank'
-                });
-                chosenVersions = shuffle(candidates).slice(0, 3);
-                ordering = 'fallback_random';
-                mmrUsed = false;
-            }
-            if (cardsRequestIdRef.current !== requestId) return; // user already moved on
-            const items = chosenVersions.map(v => ({
-                value: v.intent_value,
-                content: v.content,
-                parts: diffWords(unit.content, v.content)
-            }));
-            if (items.length === 0) {
-                const failed = { ...loadingState, loading: false, error: true };
-                cardsRef.current = failed;
-                setCardsState(failed);
-                return;
-            }
-            const shown = { ...loadingState, items, context, loading: false, shownAt: Date.now() };
-            cardsRef.current = shown;
-            setCardsState(shown);
-            logEvent({
-                unit_id: shown.unitId,
-                unit_title: shown.unitTitle,
-                intent_dimension: shown.dimension,
-                event: 'cards_shown',
-                shown_values: items.map(item => item.value),
-                positions: items.map((item, index) => index + 1),
-                ordering,
-                mmr_used: mmrUsed
-            });
+            const candidates = await fetchVersions(unit, intent);
+            if (cardsRequestIdRef.current !== requestId) return;
+            const shown = await showDisplay({ unit, unitTitle, intent, candidates, trigger: 'intent_click', requestId });
+            if (shown === 'empty') showError();
         } catch (error) {
             console.error('Error calling /intent-change-rewriter:', error);
-            if (cardsRequestIdRef.current === requestId) {
-                const failed = { ...loadingState, loading: false, error: true };
-                cardsRef.current = failed;
-                setCardsState(failed);
-            }
+            showError();
         }
     };
 
-    // cards: log edit_done once the user clicks outside the editor after "Use and edit"
+    // cards: after Use, log edit_done when the cursor leaves the unit and its text was changed (analysis only)
     const finishEditWatch = () => {
         const watch = editWatchRef.current;
         if (!watch) return;
         editWatchRef.current = null;
-        setEditingUnitId(null);
         const finalText = getUnitNodeText(watch.unitId, valueRef.current);
+        if (finalText === null || finalText === watch.replacedText) return;
         logEvent({
             unit_id: watch.unitId,
             unit_title: watch.unitTitle,
@@ -3569,11 +3641,24 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             shown_values: watch.shownValues,
             positions: watch.positions,
             chosen_value: watch.chosenValue,
-            edit_distance: finalText === null ? null : levenshtein(watch.replacedText, finalText),
+            edit_distance: levenshtein(watch.replacedText, finalText),
             duration_ms: Date.now() - watch.startedAt,
             replaced_text: watch.replacedText,
             final_text: finalText
         });
+    };
+
+    // The editor selection moved: leaving the used unit ends the edit watch
+    const checkEditWatchSelection = () => {
+        const watch = editWatchRef.current;
+        if (!watch || !editor.selection) return;
+        const node = editor.children[editor.selection.anchor.path[0]];
+        const inUnit = !!node && Array.isArray(node.children) && node.children.some(child => child && child.componentId === watch.unitId);
+        if (inUnit) {
+            watch.entered = true;
+        } else if (watch.entered) {
+            finishEditWatch();
+        }
     };
 
     useEffect(() => {
@@ -3588,39 +3673,16 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // cards: tell the preference model what happened to this display (at most once per display)
-    const sendModelUpdate = (cards, event, chosenValue) => callModel('/update', {
-        pid: EXPERIMENT.pid,
-        context: cards.context,
-        intent_dimension: cards.dimension,
-        event,
-        chosen_value: chosenValue,
-        shown_values: cards.items.map(i => i.value)
-    }).catch((updateError) => {
-        console.warn('Preference model unavailable for /update:', updateError.message);
-        logEvent({
-            unit_id: cards.unitId,
-            unit_title: cards.unitTitle,
-            intent_dimension: cards.dimension,
-            event: 'model_unavailable',
-            endpoint: 'update'
-        });
-        throw updateError;
-    });
-
-    // cards: Use / Use and edit
-    const handleCardUse = (item, edit) => {
+    // cards: Use
+    const handleCardUse = (item) => {
         const cards = cardsRef.current;
-        if (!cards || cards.loading) return;
+        if (!cards || cards.loading || cards.error || cards.regenerating || cards.ended) return;
         const unit = combinedResults.find(component => component.id === cards.unitId);
         const intent = unit && unit.linkedIntents.find(i => i.dimension === cards.dimension);
         const component = components.find(c => c.id === cards.unitId);
         if (!unit || !intent || !component) return;
 
         if (editWatchRef.current) finishEditWatch();
-        const duration = Date.now() - cards.shownAt;
-        const shownValues = cards.items.map(i => i.value);
-        const positions = cards.items.map((i, index) => index + 1);
 
         // Same value swap as the radio buttons: the chosen value becomes current, the old current takes its slot
         const otherValues = [...intent.other_values];
@@ -3638,139 +3700,141 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         const applied = replaceComponentText(cards.unitId, item.content, intentSelected);
         if (!applied) return;
 
-        const base = {
-            unit_id: cards.unitId,
-            unit_title: cards.unitTitle,
-            intent_dimension: cards.dimension,
-            shown_values: shownValues,
-            positions,
-            chosen_value: item.value,
-            duration_ms: duration
-        };
-        // One event per display: Use logs pick, Use and edit logs only edit
-        logEvent({ ...base, event: edit ? 'edit' : 'pick' });
-        sendModelUpdate(cards, edit ? 'edit' : 'pick', item.value).catch(() => {});
+        const shownValues = cards.items.map(i => i.value);
+        const positions = cards.items.map((i, index) => index + 1);
+        const update = endDisplay(cards, 'pick', { chosen_value: item.value });
+        if (update) update.catch(() => {});
         cardsRef.current = null;
         setCardsState(null);
-        setNotice(edit
-            ? `"${item.value}" applied. Edit the highlighted text in the editor, then click anywhere else to finish.`
-            : `Applied "${item.value}" to ${cards.unitTitle}.`);
+        setNotice(`Applied "${item.value}" to ${cards.unitTitle}.`);
 
-        if (edit) {
-            setEditingUnitId(cards.unitId);
-            editWatchRef.current = {
-                unitId: cards.unitId,
-                unitTitle: cards.unitTitle,
-                dimension: cards.dimension,
-                shownValues,
-                positions,
-                chosenValue: item.value,
-                replacedText,
-                startedAt: Date.now()
-            };
-            // The editor remounts after the replacement, so focus it on the next tick
-            setTimeout(() => {
-                try {
-                    const index = editor.children.findIndex(n => Array.isArray(n.children) && n.children.some(child => child && child.componentId === cards.unitId));
-                    if (index !== -1) {
-                        ReactEditor.focus(editor);
-                        Transforms.select(editor, Editor.end(editor, [index]));
-                    }
-                } catch (error) {
-                    console.warn('Could not focus the edited unit:', error);
-                }
-            }, 150);
-        }
+        // Any later change to this text is logged as edit_done once the cursor leaves the unit
+        editWatchRef.current = {
+            unitId: cards.unitId,
+            unitTitle: cards.unitTitle,
+            dimension: cards.dimension,
+            shownValues,
+            positions,
+            chosenValue: item.value,
+            replacedText,
+            startedAt: Date.now(),
+            entered: false
+        };
     };
 
-    // cards: after a rejection, ask the model whether this intent is being rejected too often and, if so,
-    // have the backend propose fresh values for it
-    const runRejectFlow = async (cards) => {
-        const shownValues = cards.items.map(item => item.value);
+    // cards: Regenerate. Ends the display, then asks the model whether the intent keeps being passed over:
+    // if so the intent gets new values, otherwise the same values are rewritten again.
+    const handleRegenerate = async () => {
+        const cards = cardsRef.current;
+        if (!cards || cards.loading || cards.error || cards.regenerating || cards.ended) return;
+        const requestId = cardsRequestIdRef.current + 1;
+        cardsRequestIdRef.current = requestId;
+        const stale = () => cardsRequestIdRef.current !== requestId;
         const base = { unit_id: cards.unitId, unit_title: cards.unitTitle, intent_dimension: cards.dimension };
+
+        const updating = endDisplay(cards, 'regenerate');
+        const working = { ...cards, regenerating: true, regenError: false };
+        cardsRef.current = working;
+        setCardsState(working);
+
+        let modelOk = true;
         try {
-            await sendModelUpdate(cards, 'reject_all', null);
+            await updating;
         } catch (updateError) {
-            return; // already logged as model_unavailable
+            modelOk = false; // already logged as model_unavailable
         }
-        let check;
-        try {
-            const response = await callModel('/reject-check', {
-                pid: EXPERIMENT.pid,
-                context: cards.context,
-                intent_dimension: cards.dimension
+        let rejectMean = null;
+        let exceeds = false;
+        if (modelOk) {
+            try {
+                const response = await callModel('/reject-check', {
+                    pid: EXPERIMENT.pid,
+                    context: cards.context,
+                    intent_dimension: cards.dimension
+                });
+                rejectMean = response.data.reject_mean;
+                exceeds = !!response.data.exceeds;
+            } catch (checkError) {
+                console.warn('Preference model unavailable for /reject-check:', checkError.message);
+                logEvent({ ...base, event: 'model_unavailable', endpoint: 'reject-check' });
+                modelOk = false;
+            }
+        }
+
+        // The old cards come back (as a new display) when a step fails
+        const restore = (step) => {
+            logEvent({ ...base, event: 'regenerate_failed', step, reject_mean: rejectMean });
+            if (stale()) return;
+            const restored = { ...cards, regenerating: false, regenError: true, ended: false, shownAt: Date.now() };
+            cardsRef.current = restored;
+            setCardsState(restored);
+            logEvent({
+                ...base,
+                event: 'cards_shown',
+                shown_values: restored.items.map(item => item.value),
+                positions: restored.items.map((item, index) => index + 1),
+                ordering: restored.ordering,
+                mmr_used: restored.mmrUsed,
+                trigger: 'regenerate'
             });
-            check = response.data;
-        } catch (checkError) {
-            console.warn('Preference model unavailable for /reject-check:', checkError.message);
-            logEvent({ ...base, event: 'model_unavailable', endpoint: 'reject-check' });
-            return;
-        }
-        if (!check || !check.exceeds) return;
+        };
 
         const unit = combinedResultsRef.current.find(component => component.id === cards.unitId);
-        const intent = unit && unit.linkedIntents.find(i => i.dimension === cards.dimension);
-        const oldOtherValues = intent ? intent.other_values : null;
-        try {
-            const response = await axios.post('http://localhost:3001/intent-regenerate-values', {
-                userName: globalUsername,
-                taskId: globalTaskId,
-                userTask,
-                draftLatest: originalTextRef.current,
-                intentDimension: cards.dimension,
-                currentValue: cards.currentValue,
-                rejectedValues: shownValues
-            });
-            const newValues = response.data && response.data.other_values;
-            if (!Array.isArray(newValues) || newValues.length === 0) throw new Error('No new values returned');
-            // Intents and units are many-to-many: every unit linked to this intent gets the new values
-            setCombinedResults(prev => prev.map(component => ({
-                ...component,
-                linkedIntents: (component.linkedIntents || []).map(i =>
-                    i.dimension === cards.dimension ? { ...i, other_values: newValues } : i)
-            })));
-            setNotice(prev => (prev === REJECT_NOTICE ? REGENERATED_NOTICE : prev));
-            logEvent({
-                ...base,
-                event: 'values_regenerated',
-                old_other_values: oldOtherValues,
-                new_other_values: newValues,
-                reject_mean: check.reject_mean
-            });
-        } catch (regenerateError) {
-            console.warn('Could not regenerate intent values:', regenerateError.message);
-            logEvent({
-                ...base,
-                event: 'regenerate_failed',
-                reject_mean: check.reject_mean,
-                error: String(regenerateError.message || regenerateError)
-            });
+        const currentIntent = unit && unit.linkedIntents.find(i => i.dimension === cards.dimension);
+        if (!unit || !currentIntent) {
+            restore('rewrite');
+            return;
         }
-    };
+        let intent = { ...currentIntent, current_value: cards.currentValue };
 
-    // cards: Reject all
-    const handleRejectAll = () => {
-        const cards = cardsRef.current;
-        if (!cards) return;
-        const countable = !cards.loading && !cards.error;
-        if (countable) {
-            logEvent({
-                unit_id: cards.unitId,
-                unit_title: cards.unitTitle,
-                intent_dimension: cards.dimension,
-                event: 'reject_all',
-                shown_values: cards.items.map(item => item.value),
-                positions: cards.items.map((item, index) => index + 1),
-                duration_ms: Date.now() - cards.shownAt
-            });
+        if (exceeds) {
+            try {
+                const response = await axios.post('http://localhost:3001/intent-regenerate-values', {
+                    userName: globalUsername,
+                    taskId: globalTaskId,
+                    userTask,
+                    draftLatest: originalTextRef.current,
+                    intentDimension: cards.dimension,
+                    currentValue: cards.currentValue,
+                    rejectedValues: cards.items.map(item => item.value)
+                });
+                const newValues = response.data && response.data.other_values;
+                if (!Array.isArray(newValues) || newValues.length === 0) throw new Error('No new values returned');
+                // Intents and units are many-to-many: every unit linked to this intent gets the new values
+                setCombinedResults(prev => prev.map(component => ({
+                    ...component,
+                    linkedIntents: (component.linkedIntents || []).map(i =>
+                        i.dimension === cards.dimension ? { ...i, other_values: newValues } : i)
+                })));
+                logEvent({
+                    ...base,
+                    event: 'values_regenerated',
+                    old_other_values: currentIntent.other_values,
+                    new_other_values: newValues,
+                    reject_mean: rejectMean
+                });
+                intent = { ...intent, other_values: newValues };
+            } catch (valuesError) {
+                console.warn('Could not regenerate intent values:', valuesError.message);
+                restore('values');
+                return;
+            }
         }
-        cardsRef.current = null;
-        cardsRequestIdRef.current += 1;
-        setCardsState(null);
-        if (countable) {
-            setNotice(REJECT_NOTICE);
-            runRejectFlow(cards);
+
+        let candidates;
+        try {
+            candidates = await fetchVersions(unit, intent);
+        } catch (rewriteError) {
+            console.warn('Could not rewrite the versions:', rewriteError.message);
+            restore('rewrite');
+            return;
         }
+        if (!exceeds && modelOk) {
+            logEvent({ ...base, event: 'versions_regenerated', reject_mean: rejectMean });
+        }
+        if (stale()) return;
+        const shown = await showDisplay({ unit, unitTitle: cards.unitTitle, intent, candidates, trigger: 'regenerate', requestId });
+        if (shown === 'empty') restore('rewrite');
     };
 
     // Add state update logic and debugging logs to handleRadioChange
@@ -4250,6 +4314,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                     editor={editor}
                                     initialValue={value}
                                     onChange={(newValue) => {
+                                        checkEditWatchSelection();
                                         try {
                                             // Validate the new value before setting it
                                             if (newValue && Array.isArray(newValue) && newValue.length > 0) {

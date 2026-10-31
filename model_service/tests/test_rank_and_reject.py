@@ -60,8 +60,8 @@ def update(client, event, chosen, shown, dim="Tone"):
 
 def test_reject_check_mean_is_computed_over_displays(client):
     assert reject_check(client)["reject_mean"] == 0.5          # no data: (1+0)/(2+0)
-    update(client, "reject_all", None, ["A", "B", "C"])
-    update(client, "reject_all", None, ["A", "B", "C"])
+    update(client, "regenerate", None, ["A", "B", "C"])
+    update(client, "regenerate", None, ["A", "B", "C"])
     update(client, "pick", "A", ["A", "B", "C"])
     result = reject_check(client)
     assert result["reject_mean"] == (1 + 2) / (2 + 3)           # R=2, C=1
@@ -80,15 +80,23 @@ def test_reject_check_pools_similar_dimensions_only(client, embedder):
     embedder.set("Tone", base)
     embedder.set("Register", unit_with_cosine(base, 0.9))
     embedder.set("Length", unit_with_cosine(base, 0.1, axis=2))
-    update(client, "reject_all", None, ["A"], dim="Register")
-    update(client, "reject_all", None, ["A"], dim="Length")
+    update(client, "regenerate", None, ["A"], dim="Register")
+    update(client, "regenerate", None, ["A"], dim="Length")
     result = reject_check(client, dim="Tone")
     assert result["n_dimensions"] == 1 and result["reject_all_shows"] == 1
     assert result["reject_mean"] == (1 + 1) / (2 + 1)
 
 
+def test_leave_counts_like_regenerate_for_the_reject_check(client):
+    update(client, "leave", None, ["A", "B", "C"])
+    update(client, "regenerate", None, ["A", "B", "C"])
+    result = reject_check(client)
+    assert result["reject_all_shows"] == 2 and result["chosen_shows"] == 0
+    assert result["reject_mean"] == (1 + 2) / (2 + 2)
+
+
 def test_reject_check_is_per_participant_and_context(client):
-    update(client, "reject_all", None, ["A"])
+    update(client, "regenerate", None, ["A"])
     assert reject_check(client, pid="P02")["n_dimensions"] == 0
     assert reject_check(client, context="c2")["n_dimensions"] == 0
 

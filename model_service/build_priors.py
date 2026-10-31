@@ -22,9 +22,13 @@ def read_events(path):
     return events
 
 
+RANDOM_ORDERINGS = ("random", "fallback_random")
+ENDING_EVENTS = ("pick", "edit", "regenerate", "leave", "reject_all")
+
+
 def merge_pick_edit_pairs(events):
     """Older logs wrote a pick immediately followed by an edit for one 'Use and edit' display.
-    Treat such a pair as a single edit. Returns (events, merged_pair_count)."""
+    Treat such a pair as a single pick (the edit event stands for it). Returns (events, merged_pair_count)."""
     kept, merged, i = [], 0, 0
     while i < len(events):
         event = events[i]
@@ -34,11 +38,23 @@ def merge_pick_edit_pairs(events):
                 and event.get("intent_dimension") == nxt.get("intent_dimension")
                 and event.get("chosen_value") == nxt.get("chosen_value")):
             merged += 1
-            i += 1  # drop the pick, the edit that follows is counted
+            i += 1  # drop the pick, the edit that follows is counted (as a pick)
             continue
         kept.append(event)
         i += 1
     return kept, merged
+
+
+def attach_ordering(events):
+    """Only cards_shown carries `ordering`; give each ending event the ordering of its display."""
+    latest = {}
+    for event in events:
+        key = (event.get("unit_id"), event.get("intent_dimension"))
+        if event.get("event") == "cards_shown":
+            latest[key] = event.get("ordering")
+        elif event.get("event") in ENDING_EVENTS and "ordering" not in event:
+            event["ordering"] = latest.get(key)
+    return events
 
 
 def build(logs_dir, pids, embedder, out_path, log=print):
@@ -50,13 +66,13 @@ def build(logs_dir, pids, embedder, out_path, log=print):
             continue
         events, merged = merge_pick_edit_pairs(read_events(path))
         merged_total += merged
-        selected.extend(e for e in events if e.get("cond") == "cards")
+        selected.extend(e for e in attach_ordering(events) if e.get("cond") == "cards")
 
-    if any("ordering" in e for e in selected):
-        selected = [e for e in selected if e.get("ordering") == "random"]
+    if any(e.get("ordering") for e in selected):
+        selected = [e for e in selected if e.get("ordering") in RANDOM_ORDERINGS]
     else:
         log("notice: the logs have no 'ordering' field yet, using all cards records")
-    log(f"merged {merged_total} pick+edit pair(s) into single edit events")
+    log(f"merged {merged_total} pick+edit pair(s) into single pick events")
 
     records = {}
     for event in selected:
@@ -65,7 +81,7 @@ def build(logs_dir, pids, embedder, out_path, log=print):
         for value, index in event_increments(event.get("event"), event.get("chosen_value"), event.get("shown_values")):
             key = (context, normalize(dimension), normalize(value))
             record = records.setdefault(key, {
-                "context": context, "intent_dimension": dimension, "value": value, "counts": [0, 0, 0]})
+                "context": context, "intent_dimension": dimension, "value": value, "counts": [0, 0]})
             record["counts"][index] += 1
 
     output = []
@@ -73,7 +89,7 @@ def build(logs_dir, pids, embedder, out_path, log=print):
         record["embedding"] = [float(x) for x in embedder.embed(text_for(record["intent_dimension"], record["value"]))]
         output.append(record)
         log(f"{record['context']} | {record['intent_dimension']}: {record['value']} -> "
-            f"[pick, edit, reject] = {record['counts']}")
+            f"[accept, reject] = {record['counts']}")
     write_json_atomic(out_path, {"records": output})
     log(f"wrote {len(output)} record(s) to {out_path}")
     return output

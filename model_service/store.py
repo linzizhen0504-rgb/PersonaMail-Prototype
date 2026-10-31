@@ -22,6 +22,18 @@ def write_json_atomic(path, data):
         raise
 
 
+def convert_legacy_record(record):
+    """Old records had three outcomes [pick, edit, reject]; now they are [accept, reject].
+    counts: accept = pick + edit. A stored prior drops the old extra base 1 so a flat [1,1,1] becomes [1,1]."""
+    if len(record.get("counts", [])) == 3:
+        pick, edit, reject = record["counts"]
+        record["counts"] = [pick + edit, reject]
+    if len(record.get("prior", [])) == 3:
+        pick, edit, reject = record["prior"]
+        record["prior"] = [max(pick + edit - 1, 0.01), reject]
+    return record
+
+
 def read_json(path, default):
     path = Path(path)
     if not path.exists():
@@ -31,7 +43,7 @@ def read_json(path, default):
 
 
 class Store:
-    """counts.json: {"records": [...], "shows": [...]}; priors.json: {"records": [...]}; stats.json: {pid: {...}}."""
+    """counts.json: {"records": [...], "shows": [...]}; each record has counts [accept, reject]; priors.json: {"records": [...]}; stats.json: {pid: {...}}."""
 
     def __init__(self, data_dir):
         self.data_dir = Path(data_dir)
@@ -44,13 +56,15 @@ class Store:
         data = read_json(self.counts_path, {})
         data.setdefault("records", [])
         data.setdefault("shows", [])
+        data["records"] = [convert_legacy_record(r) for r in data["records"]]
         return data
 
     def save_counts(self, data):
         write_json_atomic(self.counts_path, data)
 
     def load_priors(self):
-        return read_json(self.priors_path, {"records": []}).get("records", [])
+        records = read_json(self.priors_path, {"records": []}).get("records", [])
+        return [convert_legacy_record(r) for r in records]
 
     def save_priors(self, records):
         write_json_atomic(self.priors_path, {"records": records})
