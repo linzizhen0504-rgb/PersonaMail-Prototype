@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+numpy
+sentence-transformers
+pytest
+httpx

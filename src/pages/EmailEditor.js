@@ -3567,7 +3567,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             chosen_value: item.value,
             duration_ms: duration
         };
-        logEvent({ ...base, event: 'pick' });
+        // One event per display: Use logs pick, Use and edit logs only edit
+        logEvent({ ...base, event: edit ? 'edit' : 'pick' });
         cardsRef.current = null;
         setCardsState(null);
         setNotice(edit
@@ -3576,7 +3577,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
         if (edit) {
             setEditingUnitId(cards.unitId);
-            logEvent({ ...base, event: 'edit' });
             editWatchRef.current = {
                 unitId: cards.unitId,
                 unitTitle: cards.unitTitle,

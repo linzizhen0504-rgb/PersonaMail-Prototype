@@ -1,0 +1,85 @@
+import json
+
+import build_priors
+
+
+def log_line(**fields):
+    base = {"timestamp": "t", "pid": "P01", "cond": "cards", "unit_id": "u1", "unit_title": "Statement of Purpose",
+            "intent_dimension": "Reason", "shown_values": None, "positions": None, "chosen_value": None,
+            "edit_distance": None, "duration_ms": None}
+    base.update(fields)
+    return json.dumps(base)
+
+
+def write_log(folder, pid, lines):
+    (folder / f"{pid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+SHOWN = ["Technical difficulties", "Personal emergency", "Scheduled appointment"]
+
+
+def counts_of(records):
+    return {r["value"].lower().rstrip("."): r["counts"] for r in records}
+
+
+def run(tmp_path, embedder, pids=("P01",)):
+    messages = []
+    out = tmp_path / "priors.json"
+    records = build_priors.build(tmp_path, list(pids), embedder, out, log=messages.append)
+    return records, messages, out
+
+
+def test_builds_counts_from_stage_one_log(tmp_path, embedder):
+    write_log(tmp_path, "P01", [
+        log_line(event="cards_shown", shown_values=SHOWN),
+        log_line(event="pick", shown_values=SHOWN, chosen_value="Technical difficulties"),
+        log_line(event="cards_shown", shown_values=SHOWN),
+        log_line(event="reject_all", shown_values=SHOWN),
+        log_line(event="leave", shown_values=SHOWN),
+        log_line(event="pick", cond="baseline", shown_values=SHOWN, chosen_value="Personal emergency"),
+    ])
+    records, messages, out = run(tmp_path, embedder)
+    assert counts_of(records) == {"technical difficulties": [1, 0, 1], "personal emergency": [0, 0, 2],
+                                  "scheduled appointment": [0, 0, 2]}
+    assert all(r["context"] == "unknown" and "pid" not in r and len(r["embedding"]) == 64 for r in records)
+    assert any("no 'ordering' field" in m for m in messages)
+    assert json.loads(out.read_text())["records"] == records
+
+
+def test_exact_matches_merge_across_participants(tmp_path, embedder):
+    write_log(tmp_path, "P01", [log_line(event="pick", shown_values=["Technical difficulties", "B"],
+                                         chosen_value="Technical difficulties")])
+    write_log(tmp_path, "P02", [log_line(pid="P02", event="pick", shown_values=["technical difficulties.", "B"],
+                                         chosen_value="technical difficulties.")])
+    records, _, _ = run(tmp_path, embedder, pids=("P01", "P02"))
+    assert counts_of(records) == {"technical difficulties": [2, 0, 0], "b": [0, 0, 2]}
+
+
+def test_only_random_ordering_is_used_once_logs_have_the_field(tmp_path, embedder):
+    write_log(tmp_path, "P01", [
+        log_line(event="pick", shown_values=["A", "B"], chosen_value="A", ordering="random"),
+        log_line(event="pick", shown_values=["A", "B"], chosen_value="B", ordering="ranked"),
+    ])
+    records, messages, _ = run(tmp_path, embedder)
+    assert counts_of(records) == {"a": [1, 0, 0], "b": [0, 0, 1]}
+    assert not any("no 'ordering' field" in m for m in messages)
+
+
+def test_legacy_pick_then_edit_pair_counts_as_one_edit(tmp_path, embedder):
+    write_log(tmp_path, "P01", [
+        # old logs: Use and edit wrote a pick and then an edit for the same display
+        log_line(event="pick", shown_values=SHOWN, chosen_value="Technical difficulties"),
+        log_line(event="edit", shown_values=SHOWN, chosen_value="Technical difficulties"),
+        log_line(event="edit_done", shown_values=SHOWN, chosen_value="Technical difficulties", edit_distance=4),
+        # a plain pick followed by something else is not merged
+        log_line(event="pick", shown_values=SHOWN, chosen_value="Personal emergency"),
+        log_line(event="cards_shown", shown_values=SHOWN),
+        # a pick followed by an edit of a different value is not merged either
+        log_line(event="pick", shown_values=SHOWN, chosen_value="Personal emergency"),
+        log_line(event="edit", shown_values=SHOWN, chosen_value="Scheduled appointment"),
+    ])
+    records, messages, _ = run(tmp_path, embedder)
+    assert counts_of(records) == {"technical difficulties": [0, 1, 3],
+                                  "personal emergency": [2, 0, 2],
+                                  "scheduled appointment": [0, 1, 3]}
+    assert any(m.startswith("merged 1 pick+edit pair") for m in messages)

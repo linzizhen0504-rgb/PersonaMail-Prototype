@@ -37,3 +37,4 @@ yarn-error.log*
 /model_service/data/counts.json
 /model_service/data/stats.json
 __pycache__/
+.pytest_cache/
