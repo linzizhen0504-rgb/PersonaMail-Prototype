@@ -1896,6 +1896,63 @@ app.post('/intent-change-rewriter', async (req, res) => {
 });
 
 
+// Propose new alternative values for one intent after the user rejected every version shown for it
+app.post('/intent-regenerate-values', async (req, res) => {
+    const { userName, taskId, userTask, draftLatest, intentDimension, currentValue, rejectedValues } = req.body;
+
+    if (!userTask || !draftLatest || !intentDimension || !currentValue || !Array.isArray(rejectedValues)) {
+        return res.status(400).json({ error: 'Missing required fields in the request body' });
+    }
+
+    const promptPath = path.join(__dirname, '../../public/data/Prompts/17intent_regenerate_values.prompt.md');
+    let promptTemplate;
+    try {
+        promptTemplate = fs.readFileSync(promptPath, 'utf-8');
+    } catch (error) {
+        console.error('Failed to load 17intent_regenerate_values.prompt.md:', error);
+        return res.status(500).json({ error: 'Failed to load prompt template' });
+    }
+
+    let factorChoices = {};
+    if (userName && taskId) {
+        try {
+            const factorChoicesPath = path.join(__dirname, '../data/SessionData', userName, taskId, 'factors', 'choices.json');
+            factorChoices = JSON.parse(fs.readFileSync(factorChoicesPath, 'utf-8'));
+        } catch (error) {
+            console.warn('Could not load factor choices:', error.message);
+        }
+    }
+
+    const values = {
+        USER_TASK: userTask,
+        FACTOR_CHOICES: JSON.stringify(filterFactorChoices(factorChoices), null, 2),
+        DRAFT_LATEST: draftLatest,
+        INTENT_DIMENSION: intentDimension,
+        CURRENT_VALUE: currentValue,
+        REJECTED_VALUES: JSON.stringify(rejectedValues)
+    };
+    const prompt = promptTemplate.replace(/\{\{([A-Z_]+)\}\}/g, (match, key) => (key in values ? values[key] : match));
+
+    // Exactly 3 distinct, non-empty values that differ from the current and the rejected ones
+    const normalizeValue = (value) => String(value).toLowerCase().replace(/^[\W_]+|[\W_]+$/g, '').replace(/\s+/g, ' ').trim();
+    const excluded = new Set([currentValue, ...rejectedValues].map(normalizeValue));
+    const isValidValues = (data) => {
+        const list = data && data.other_values;
+        if (!Array.isArray(list) || list.length !== 3) return false;
+        if (!list.every(value => typeof value === 'string' && value.trim())) return false;
+        const keys = list.map(normalizeValue);
+        return new Set(keys).size === 3 && keys.every(key => !excluded.has(key));
+    };
+
+    try {
+        const parsed = await requestModelJson(prompt, {}, isValidValues);
+        res.json({ other_values: parsed.other_values.map(value => value.trim()) });
+    } catch (error) {
+        console.error('Error in Intent Regenerate Values:', error);
+        res.status(500).json({ error: 'Failed to regenerate intent values' });
+    }
+});
+
 app.post('/ai-generate-rewrite', async (req, res) => {
     const { userTask, userName, taskId, selectedContent, userPrompt } = req.body;
 
