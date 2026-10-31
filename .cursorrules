@@ -1,0 +1,30 @@
+# Ignore specific files or directories
+ignore:
+  - node_modules/
+  - dist/
+  - build/
+  - .git/
+  - .env
+  - *.log
+
+# Define file-specific rules
+rules:
+  - match: "*.js"
+    linter: eslint
+    formatter: prettier
+
+  - match: "*.ts"
+    linter: eslint
+    formatter: prettier
+
+  - match: "*.py"
+    linter: flake8
+    formatter: black
+
+  - match: "*.md"
+    formatter: prettier
+
+# Set default behavior
+default:
+  linter: none
+  formatter: none 

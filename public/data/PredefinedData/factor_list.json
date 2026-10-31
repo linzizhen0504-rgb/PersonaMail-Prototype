@@ -1,0 +1,214 @@
+[
+  {
+    "id": "affiliation",
+    "select_type": "single",
+    "source": "Persona",
+    "title": "Affiliation (Warmth / Friendliness)",
+    "Category": "Relationship between sender and receiver",
+    "options": [
+      {
+        "value": "Hostile",
+        "type": "pre-defined"
+      },
+      {
+        "value": "Neutral",
+        "type": "pre-defined"
+      },
+      {
+        "value": "Friendly / Warm",
+        "type": "pre-defined"
+      }
+    ]
+  },
+  {
+    "id": "familiarity",
+    "select_type": "single",
+    "source": "Persona",
+    "title": "Familiarity",
+    "Category": "Relationship between sender and receiver",
+    "options": [
+      { "value": "Strangers", "type": "pre-defined" },
+      { "value": "Known but Unfamiliar", "type": "pre-defined" },
+      { "value": "Superficially Familiar", "type": "pre-defined" },
+      { "value": "Familiar", "type": "pre-defined" },
+      { "value": "Close / Intimate", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "power_difference",
+    "select_type": "single",
+    "source": "Persona",
+    "title": "Power, resource, status, hierarchy difference",
+    "Category": "Relationship between sender and receiver",
+    "options": [
+      { "value": "Receiver is higher", "type": "pre-defined" },
+      { "value": "Equal", "type": "pre-defined" },
+      { "value": "Receiver is lower", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "relationship_needs",
+    "select_type": "single",
+    "source": "Persona",
+    "title": "Needs for Maintaining relationship",
+    "Category": "Relationship between sender and receiver",
+    "options": [
+      { "value": "Get far away", "type": "pre-defined" },
+      { "value": "Remain the same", "type": "pre-defined" },
+      { "value": "Get closer", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "demography_gender",
+    "select_type": "single",
+    "source": "Persona",
+    "title": "Gender of the receiver",
+    "Category": "Demography",
+    "options": [
+      { "value": "Male", "type": "pre-defined" },
+      { "value": "Female", "type": "pre-defined" },
+      { "value": "Non-binary", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "demography_age",
+    "select_type": "single",
+    "source": "Persona",
+    "title": "Age of the receiver",
+    "Category": "Demography",
+    "options": [
+      { "value": "Child (Under 13)", "type": "pre-defined" },
+      { "value": "Teenager / Adolescent (13-17)", "type": "pre-defined" },
+      { "value": "Young Adult (18-24)", "type": "pre-defined" },
+      { "value": "Adult (25-64)", "type": "pre-defined" },
+      { "value": "Senior / Older Adult (65+)", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "demography_culture",
+    "select_type": "single",
+    "source": "Persona",
+    "title": "Culture",
+    "Category": "Demography",
+    "options": [
+      { "value": "Direct Western Culture", "type": "pre-defined" },
+      { "value": "Indirect Eastern Culture", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "Your personality_traits",
+    "select_type": "single",
+    "source": "Persona",
+    "title": "Personality traits",
+    "Category": "Demography",
+    "options": [
+      { "value": "Introverted", "type": "pre-defined" },
+      { "value": "Extroverted", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "communication_purpose",
+    "select_type": "multiple",
+    "source": "Situation",
+    "title": "Communication Purpose",
+    "Category": "Communication Context",
+    "options": [
+      { "value": "inform", "type": "pre-defined" },
+      { "value": "persuade", "type": "pre-defined" },
+      { "value": "build rapport", "type": "pre-defined" },
+      { "value": "entertain", "type": "pre-defined" },
+      { "value": "criticism", "type": "pre-defined" },
+      { "value": "requests", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "promptness",
+    "select_type": "single",
+    "source": "Situation",
+    "title": "Promptness",
+     "Category": "Communication Context",
+    "options": [
+      { "value": "Urgent", "type": "pre-defined" },
+      { "value": "Non-urgent", "type": "pre-defined" }
+    ]
+  },
+    {
+    "id": "occasion",
+    "select_type": "single",
+    "source": "Situation",
+    "title": "Occasion",
+     "Category": "Communication Context",
+    "options": [
+      { "value": "Formal: On behalf of an organization or writing for a formal event. Formal notification or announcement.", "type": "pre-defined" },
+      { "value": "Personal", "type": "pre-defined" }
+    ]
+  },
+
+  {
+    "id": "emotion_to_convey",
+    "select_type": "multiple",
+    "source": "Situation",
+    "title": "You want the receiver to feel you are",
+     "Category": "Risk Mitigation",
+    "options": [
+      { "value": "Gratitude / Appreciation", "type": "pre-defined" },
+      { "value": "Excitement / Enthusiasm", "type": "pre-defined" },
+      { "value": "Apology / Regret", "type": "pre-defined" },
+      { "value": "Frustration / Disappointment", "type": "pre-defined" },
+      { "value": "Concern / Empathy", "type": "pre-defined" },
+      { "value": "acquiescent (submissive)", "type": "pre-defined" },
+      { "value": "Neutral Emotion", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "emotion_to_avoid",
+    "select_type": "multiple",
+    "source": "Situation",
+    "title": "You want to avoid the receiver from feeling you are",
+    "Category": "Risk Mitigation",
+    "options": [
+      { "value": "Avoid Disrespectful / Aggressive", "type": "pre-defined" },
+      { "value": "Avoid Condescending / Patronizing", "type": "pre-defined" },
+      { "value": "Avoid Dismissive / Uncaring", "type": "pre-defined" },
+      { "value": "Avoid Confusing / Unclear", "type": "pre-defined" },
+      { "value": "Avoid Annoyed / Irritated", "type": "pre-defined" },
+      { "value": "NA", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "mistake_attribution",
+    "select_type": "single",
+    "source": "Situation",
+    "title": "The mistake is more on which side?",
+     "Category": "Risk Mitigation",
+    "options": [
+      { "value": "Our side", "type": "pre-defined" },
+      { "value": "Receiver's side", "type": "pre-defined" },
+      { "value": "It’s not whose mistake", "type": "pre-defined" }
+    ]
+  },
+
+  {
+    "id": "avoid_negative_consequence",
+    "select_type": "multiple",
+    "source": "Situation",
+    "title": "Avoid negative consequence",
+    "Category": "Risk Mitigation",
+    "options": [
+      { "value": "Avoid being harsh", "type": "pre-defined" },
+      { "value": "Avoid breaking relationships", "type": "pre-defined" },
+      { "value": "Avoid being criticized by the receiver", "type": "pre-defined" }
+    ]
+  },
+  {
+    "id": "balance_competing_factors",
+    "select_type": "multiple",
+    "source": "Situation",
+    "title": "Balance competing factors",
+    "Category": "Risk Mitigation",
+    "options": [
+      { "value": "Show apology vs. clearly state my request", "type": "pre-defined" },
+      { "value": "Clearly state my request but avoid hurting future relationships", "type": "pre-defined" }
+    ]
+  }
+]
