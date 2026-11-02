@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
-import { Card, Typography, message, Button, Row, Col, Tooltip, Tag, Radio, Checkbox, Flex, Modal, Input, Spin } from 'antd';
+import { Card, Typography, message, Button, Row, Col, Tooltip, Tag, Radio, Checkbox, Flex, Modal, Input, Spin, Tour } from 'antd';
 import axios from 'axios';
 import { diffWords } from 'diff';
 import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -298,10 +298,29 @@ const EmailEditor = () => {
     });
     const [modificationReason, setModificationReason] = useState('');
     const [lastModifiedComponent, setLastModifiedComponent] = useState(null);
-    const [regenerateLoading, setRegenerateLoading] = useState(false);
     // The editor stays blank until a draft has been generated from the factor panel
     const [hasDraft, setHasDraft] = useState(false);
     const [draftGenerating, setDraftGenerating] = useState(false);
+    // First-use guide (cards condition): after the first draft, point the user to "Generate Components".
+    // Shown once per username; the flag lives in localStorage (without storage it shows once per page load).
+    const generateButtonRef = useRef(null);
+    const guideKey = `personamail_guide_components_seen:${globalUsername || ''}`;
+    const [guideSeen, setGuideSeen] = useState(true);
+    useEffect(() => {
+        try {
+            setGuideSeen(localStorage.getItem(guideKey) === '1');
+        } catch (error) {
+            setGuideSeen(false);
+        }
+    }, [guideKey]);
+    const markGuideSeen = () => {
+        setGuideSeen(true);
+        try {
+            localStorage.setItem(guideKey, '1');
+        } catch (error) {
+            console.warn('Could not remember the guide state:', error);
+        }
+    };
     // Factor selections are made in the chat step first, then stay editable in the editor sidebar
     const factorSelection = useFactorSelection({
         userTask,
@@ -449,38 +468,6 @@ const EmailEditor = () => {
 
     const handleDiscardAiPreview = () => {
         setAiPreview({ visible: false, content: '' });
-    };
-
-    // Regenerate Draft function
-    const handleRegenerateDraft = async () => {
-        try {
-            setRegenerateLoading(true);
-            
-            // Call the regenerate-draft endpoint with required parameters
-            const response = await axios.post('http://localhost:3001/regenerate-draft', {
-                taskId: globalTaskId,
-                userTask: userTask,
-                userName: globalUsername
-            });
-            
-            if (response.data) {
-                const newContent = response.data.draft || response.data;
-                
-                // Save to drafts/latest.md
-                await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                    content: newContent
-                });
-                
-                applyDraftText(newContent);
-                
-                message.success('Draft regenerated successfully');
-            }
-        } catch (error) {
-            console.error('Failed to regenerate draft:', error);
-            message.error('Failed to regenerate draft');
-        } finally {
-            setRegenerateLoading(false);
-        }
     };
 
     // Load draft content on component mount
@@ -2514,6 +2501,7 @@ const Toolbar = () => {
             background: '#fafafa',
             display: 'flex',
             flexWrap: 'wrap',
+            alignItems: 'center',
             gap: '4px',
         }}>
             {/* Text formatting buttons */}
@@ -2913,6 +2901,9 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         return availableColor;
     };
 
+    const showGuide = EXPERIMENT.cond === 'cards' && !!globalUsername && hasDraft && !draftGenerating
+        && components.length === 0 && !guideSeen;
+
     // cards condition: intent pills, version cards and the follow-up notice
     const renderCardsIntents = () => {
         const unit = selectedComponentId ? combinedResults.find(component => component.id === selectedComponentId) : null;
@@ -2947,7 +2938,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                     style={{
                                         margin: 0,
                                         cursor: 'pointer',
-                                        borderRadius: '16px',
+                                        borderRadius: '10px',
                                         padding: '5px 12px',
                                         fontSize: '13px',
                                         border: active ? '1px solid #2f6fde' : '1px solid #e3e5e8',
@@ -3016,11 +3007,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                         </div>
                                     ))}
                                 </div>
-                                <div style={{ marginTop: '8px', fontSize: '12px', color: '#8a9099' }}>
-                                    <span style={diffRemoved}>removed</span>
-                                    {' '}
-                                    <span style={diffAdded}>added</span>
-                                </div>
                             </>
                         )}
                     </div>
@@ -3052,19 +3038,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         // // 检查是否有dimension标记或高亮
         const hasDimensions = leaf.hasDimensions && leaf.linkedIntents && leaf.linkedIntents.length > 0;
         const isHighlighted = leaf.highlight;
-        const isFirstTextNode = leaf.isFirstTextNode;
 
         if (hasDimensions || isHighlighted) {
-            // 获取dimension信息
-            let dimensions = [];
-            if (leaf.linkedIntents) {
-                dimensions = leaf.linkedIntents;
-            } else if (leaf.componentId) {
-                // 如果没有直接的linkedIntents，从combinedResults中查找
-                const combinedResult = combinedResults.find(result => result.id === leaf.componentId);
-                dimensions = combinedResult?.linkedIntents || [];
-            }
-            
             // 根据是否高亮设置不同的文本样式
             const isCards = EXPERIMENT.cond === 'cards';
             const textStyle = isHighlighted && isCards ? {
@@ -3085,43 +3060,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             
             element = (
                 <span style={{ position: 'relative' }}>
-                    {/* 每个component的第一个文本节点都显示dimension圆圈 */}
-                    {dimensions.length > 0 && isFirstTextNode && (
-                        <div style={{
-                            position: 'absolute',
-                            top: '-12px',
-                            left: '0',
-                            display: 'flex',
-                            gap: '4px',
-                            zIndex: 10,
-                            flexWrap: 'wrap'
-                        }}>
-                            {dimensions.map((intent, index) => (
-                                <Button
-                                    key={`${leaf.componentId}-${index}`}
-                                    size="small"
-                                    shape="circle"
-                                    style={{
-                                        width: '10px',
-                                        height: '10px',
-                                        minWidth: '10px',
-                                        padding: '0',
-                                        fontSize: '8px',
-                                        backgroundColor: getDimensionColor(intent.dimension),
-                                        border: 'none',
-                                        cursor: 'pointer'
-                                    }}
-                                    onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        handleDimensionClick(intent, leaf.componentId);
-                                    }}
-                                    title={`${intent.dimension}: ${intent.current_value}`}
-                                />
-                            ))}
-                        </div>
-                    )}
-                    
                     <span
                         {...attributes}
                         style={textStyle}
@@ -3475,7 +3413,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     // capture phase, so the leave is logged before the button's own handler changes anything.
     useEffect(() => {
         if (EXPERIMENT.cond !== 'cards') return undefined;
-        const leaveButtons = ['Regenerate Draft', 'Save Draft', 'Generate Components', 'Reset Editor', 'New Task'];
+        const leaveButtons = ['Generate Components', 'Reset Editor', 'New Task'];
         const handleClick = (event) => {
             const button = event.target && event.target.closest ? event.target.closest('button') : null;
             if (!button || !leaveButtons.includes((button.innerText || '').trim())) return;
@@ -4002,48 +3940,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         }
     };
 
-    // Save draft function - extract current editor content and save
-    const handleSaveDraft = async () => {
-        try {
-            // Validate editor state
-            if (!value || !Array.isArray(value)) {
-                message.error('Invalid editor content. Please refresh and try again.');
-                return;
-            }
-            
-            // Extract current text content from editor
-            const currentContent = value.map(node => {
-                return getNodeText(null, node);
-            }).filter(text => text.trim()).join('\n\n');
-            
-            if (!currentContent.trim()) {
-                message.warning('No content to save.');
-                return;
-            }
-            
-            // Update originalText with current editor content
-            setOriginalText(currentContent);
-            
-            // Save to drafts/latest.md
-            await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                content: currentContent,
-            });
-            
-            // Clear component-related states
-            setComponents([]);
-            setCombinedResults([]);
-            setSelectedComponentId(null);
-            
-            // Clear any highlighting or markers
-            clearAllMarkers();
-            
-            message.success('Draft saved successfully.');
-        } catch (error) {
-            console.error('Error saving draft:', error);
-            message.error('Failed to save draft. Please try again.');
-        }
-    };
-
     const handleCombinedResult = async () => {
         try {
             // Fetch current intents from session data
@@ -4256,18 +4152,16 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0 }}>
                 <div style={{ fontSize: '24px', fontWeight: 'bold' }}>Email Draft Editor</div>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                    <Button onClick={handleRegenerateDraft} loading={regenerateLoading} disabled={!hasDraft}>Regenerate Draft</Button>
                     <Button
-                        onClick={handleSaveDraft}
+                        ref={generateButtonRef}
+                        onClick={() => {
+                            if (showGuide) markGuideSeen();
+                            handleExtractComponents();
+                        }}
+                        loading={loading}
                         disabled={!hasDraft}
                     >
-                        Save Draft
-                    </Button>
-                    <Button onClick={handleExtractComponents} loading={loading} disabled={!hasDraft}>
                         Generate Components
-                    </Button>
-                    <Button onClick={removeAllHighlighting}>
-                        Clear Highlighting
                     </Button>
                     <Button onClick={safeResetEditor} danger>
                         Reset Editor
@@ -4275,6 +4169,27 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 </div>
             </div>
             
+            <style>{`
+                .components-guide .ant-tour,
+                .components-guide .ant-tour-content,
+                .components-guide .ant-tour-inner { width: max-content; min-width: 0; max-width: none; }
+                .components-guide .ant-tour-description { white-space: nowrap; }
+            `}</style>
+            <Tour
+                rootClassName='components-guide'
+                open={showGuide}
+                onClose={markGuideSeen}
+                onFinish={markGuideSeen}
+                mask={{ color: 'rgba(0, 0, 0, 0.25)' }}
+                steps={[{
+                    target: () => generateButtonRef.current,
+                    description: 'Click to split your email into parts and see the writing choices behind each part.',
+                    placement: 'bottomRight',
+                    closeIcon: false,
+                    nextButtonProps: { children: 'Got it' }
+                }]}
+            />
+
             <Card
             className="email-editor-card"
                 size="small"
@@ -4354,13 +4269,37 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                     <div style={{ 
                                         flex: 1, 
                                         minHeight: 0,
-                                        overflow: 'auto'
+                                        overflow: 'auto',
+                                        position: 'relative'
                                     }}>
+                                        {draftGenerating && (
+                                            <div className='draft-generating' role='status' aria-live='polite'>
+                                                <style>{`
+                                                    .draft-generating { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center;
+                                                        justify-content: center; gap: 14px; background: rgba(255, 255, 255, 0.85); color: #1677ff;
+                                                        font-size: 18px; font-weight: 600; }
+                                                    .draft-generating .dot { width: 12px; height: 12px; border-radius: 50%; background: #1677ff;
+                                                        display: inline-block; animation: draft-bounce 1s infinite ease-in-out; }
+                                                    .draft-generating .dot:nth-child(2) { animation-delay: 0.15s; }
+                                                    .draft-generating .dot:nth-child(3) { animation-delay: 0.3s; }
+                                                    @keyframes draft-bounce {
+                                                        0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+                                                        40% { transform: translateY(-12px); opacity: 1; }
+                                                    }
+                                                `}</style>
+                                                <span style={{ display: 'inline-flex', gap: '8px', alignItems: 'flex-end', height: '24px' }}>
+                                                    <span className='dot' />
+                                                    <span className='dot' />
+                                                    <span className='dot' />
+                                                </span>
+                                                <span>Generating email…</span>
+                                            </div>
+                                        )}
                                         <Editable
                                             renderElement={renderElement}
                                             renderLeaf={renderLeaf}
                                             onKeyDown={handleKeyDown}
-                                            placeholder={loading ? 'Loading...' : draftGenerating ? 'Generating draft...' : hasDraft ? 'Start typing...' : 'Select your options in the left sidebar, then click "Generate Email Draft".'}
+                                            placeholder={loading ? 'Loading...' : draftGenerating ? '' : hasDraft ? 'Start typing...' : 'Select your options in the left sidebar, then click "Generate Email Draft".'}
                                             style={{
                                                 padding: '16px',
                                                 minHeight: '400px',

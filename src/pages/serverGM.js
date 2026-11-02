@@ -1305,55 +1305,6 @@ app.post('/save-manual-edit-tool', async (req, res) => {
     }
 });
 
-// Regenerate Draft 接口
-app.post('/regenerate-draft', async (req, res) => {
-    const { taskId, userTask, userName } = req.body;
-
-    if (!userTask) {
-        return res.status(400).json({ error: 'userTask and factorChoices are required' });
-    }
-
-    const promptPath = path.join(__dirname, '../../public/data/Prompts/4first_draft_composer.prompt.md');
-    let promptTemplate;
-
-    const factorChoicesPath = path.join(__dirname, '../data/SessionData', userName, taskId, 'factors', 'choices.json');
-    
-    
-    let factorChoices;
-    try {
-        factorChoices = fs.readFileSync(factorChoicesPath, 'utf-8');
-    } catch (error) {
-        console.error('Failed to read factor choices:', error);
-        return res.status(500).json({ error: 'Failed to read factor choices' });
-    }
-
-
-
-    try {
-        promptTemplate = fs.readFileSync(promptPath, 'utf-8');
-    } catch (error) {
-        console.error('Failed to load 4first_draft_composer.prompt.md:', error);
-        return res.status(500).json({ error: 'Failed to load prompt template' });
-    }
- 
-    const prompt = promptTemplate
-        .replace('{{USER_TASK}}', userTask)
-        .replace('{{FACTOR_CHOICES}}', JSON.stringify(factorChoices, null, 2));
-
-    try {
-        const draftContent = await sendRequestToGemini(prompt, { enableThinking: true, timeout: 120000 }); // 2 minutes timeout
-
-        if (!draftContent) {
-            throw new Error('AI response is empty');
-        }
-
-        res.json({ draft: draftContent.trim() });
-    } catch (error) {
-        console.error('Error generating first draft:', error);
-        res.status(500).json({ error: 'Failed to generate first draft' });
-    }
-});
-
 app.post('/generate-anchor-builder', async (req, res) => {
     const { userTask, userName, taskId } = req.body;
 
