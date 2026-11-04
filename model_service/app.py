@@ -24,6 +24,8 @@ class RankRequest(BaseModel):
     intent_dimension: str
     candidates: List[Candidate]
     k: Optional[int] = None
+    session_id: Optional[str] = None
+    current_text: Optional[str] = None
 
 
 class UpdateRequest(BaseModel):
@@ -33,6 +35,14 @@ class UpdateRequest(BaseModel):
     event: str
     chosen_value: Optional[str] = None
     shown_values: List[str] = []
+    session_id: Optional[str] = None
+    current_text: Optional[str] = None
+    shown_texts: Optional[List[str]] = None
+
+
+class ResetSessionRequest(BaseModel):
+    pid: str
+    session_id: str
 
 
 class RejectCheckRequest(BaseModel):
@@ -67,12 +77,20 @@ def create_app(model=None):
     @app.post("/rank")
     def rank(req: RankRequest):
         return model.rank(req.pid, req.context, req.intent_dimension,
-                          [c.model_dump() for c in req.candidates], req.k)
+                          [c.model_dump() for c in req.candidates], req.k,
+                          session_id=req.session_id, current_text=req.current_text)
 
     @app.post("/update")
     def update(req: UpdateRequest):
         return model.update(req.pid, req.context, req.intent_dimension,
-                            req.event, req.chosen_value, req.shown_values)
+                            req.event, req.chosen_value, req.shown_values,
+                            session_id=req.session_id, current_text=req.current_text,
+                            shown_texts=req.shown_texts)
+
+    @app.post("/reset-session")
+    def reset_session(req: ResetSessionRequest):
+        model.reset_session(req.pid, req.session_id)
+        return {"ok": True}
 
     @app.post("/reject-check")
     def reject_check(req: RejectCheckRequest):

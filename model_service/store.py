@@ -51,6 +51,7 @@ class Store:
         self.counts_path = self.data_dir / "counts.json"
         self.priors_path = self.data_dir / "priors.json"
         self.stats_path = self.data_dir / "stats.json"
+        self.styles_path = self.data_dir / "styles.json"
 
     def load_counts(self):
         data = read_json(self.counts_path, {})
@@ -74,3 +75,9 @@ class Store:
 
     def save_stats(self, data):
         write_json_atomic(self.stats_path, data)
+
+    def load_styles(self):
+        return read_json(self.styles_path, {})
+
+    def save_styles(self, data):
+        write_json_atomic(self.styles_path, data)

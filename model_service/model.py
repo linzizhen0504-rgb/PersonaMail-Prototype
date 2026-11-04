@@ -7,6 +7,7 @@ import numpy as np
 
 import config
 from embedding import cosine
+from style import StyleState, relative_scores
 
 ACCEPT, REJECT = 0, 1
 
@@ -61,6 +62,9 @@ class PreferenceModel:
             "reject_threshold": config.REJECT_THRESHOLD,
             "dimension_sim_threshold": config.DIMENSION_SIM_THRESHOLD,
             "default_k": config.DEFAULT_K,
+            "style_weight": config.STYLE_WEIGHT,
+            "style_value_weight": config.STYLE_VALUE_WEIGHT,
+            "style_delta_scale": config.STYLE_DELTA_SCALE,
         }
         self.cfg.update(overrides)
 
@@ -122,6 +126,55 @@ class PreferenceModel:
         lookup = {"type": "similar", "refs": refs} if refs else {"type": "none"}
         return np.asarray(prior, dtype=float), lookup
 
+    # ----- style preference (per participant and email session) -----
+    @staticmethod
+    def _style_key(pid, session_id):
+        return f"{pid}|{session_id}"
+
+    def style_state(self, pid, session_id):
+        """A copy of the style state of this email session (empty if none)."""
+        with self.store.lock:
+            data = self.store.load_styles().get(self._style_key(pid, session_id))
+        return StyleState.from_dict(data) if data else StyleState()
+
+    def reset_session(self, pid, session_id):
+        with self.store.lock:
+            styles = self.store.load_styles()
+            if styles.pop(self._style_key(pid, session_id), None) is not None:
+                self.store.save_styles(styles)
+
+    def style_feature(self, value, text, current_text):
+        """What a card says about style: how its text differs from the current text (content cancels out), plus the
+        words of its value. Without texts only the value words are used."""
+        value_part = self.cfg["style_value_weight"] * np.asarray(self.embedder.embed(value), dtype=float)
+        if text and current_text:
+            change = np.asarray(self.embedder.embed(text), dtype=float) - np.asarray(self.embedder.embed(current_text), dtype=float)
+            change_part = change / self.cfg["style_delta_scale"]
+        else:
+            change_part = np.zeros_like(value_part)
+        return np.concatenate([change_part, value_part])
+
+    def _update_style(self, pid, session_id, event, chosen_value, shown_values, shown_texts, current_text):
+        shown = list(shown_values or [])
+        texts = list(shown_texts or [])
+        chosen_key = normalize(chosen_value)
+        with self.store.lock:
+            styles = self.store.load_styles()
+            key = self._style_key(pid, session_id)
+            state = StyleState.from_dict(styles[key]) if key in styles else StyleState()
+            for index, value in enumerate(shown):
+                text = texts[index] if index < len(texts) else None
+                if event == "pick":
+                    weight = config.STYLE_PICK_WEIGHT if normalize(value) == chosen_key else config.STYLE_SIBLING_WEIGHT
+                elif event == "regenerate":
+                    weight = config.STYLE_REGENERATE_WEIGHT
+                else:
+                    weight = config.STYLE_LEAVE_WEIGHT
+                state.add(self.style_feature(value, text, current_text), weight)
+            styles[key] = state.to_dict()
+            self.store.save_styles(styles)
+        return state
+
     # ----- ranking -----
     def sample_scores(self, params_list):
         scores = []
@@ -143,7 +196,7 @@ class PreferenceModel:
             remaining.remove(best)
         return selected
 
-    def rank(self, pid, context, dimension, candidates, k=None):
+    def rank(self, pid, context, dimension, candidates, k=None, session_id=None, current_text=None):
         k = k or self.cfg["default_k"]
         with self.store.lock:
             counts = self.store.load_counts()
@@ -153,6 +206,19 @@ class PreferenceModel:
                 params_list.append(params)
                 lookups.append(lookup)
             scores = self.sample_scores(params_list)
+
+            # Style term: how well each card matches what this user took / passed over so far in this email
+            style_scores = {c["value"]: 0.0 for c in candidates}
+            style_strength = 0.0
+            if session_id:
+                state = self.style_state(pid, session_id)
+                style_strength = state.strength
+                if style_strength > 0:
+                    features = [self.style_feature(c["value"], c.get("text"), current_text) for c in candidates]
+                    relative = relative_scores(features, state.p)
+                    for i, c in enumerate(candidates):
+                        style_scores[c["value"]] = relative[i]
+                        scores[i] += self.cfg["style_weight"] * style_strength * relative[i]
 
             mmr_used = len(candidates) > k
             if mmr_used:
@@ -182,10 +248,13 @@ class PreferenceModel:
             "lookups": {c["value"]: lookups[i] for i, c in enumerate(candidates)},
             "ordering": ordering,
             "mmr_used": mmr_used,
+            "style_scores": style_scores,
+            "style_strength": style_strength,
         }
 
     # ----- updates -----
-    def update(self, pid, context, dimension, event, chosen_value, shown_values):
+    def update(self, pid, context, dimension, event, chosen_value, shown_values=None,
+               session_id=None, current_text=None, shown_texts=None):
         event = canonical_event(event)
         increments = event_increments(event, chosen_value, shown_values)
         if not increments:
@@ -218,10 +287,14 @@ class PreferenceModel:
             tally["chosen_shows" if event in CHOSEN_EVENTS else "reject_all_shows"] += 1
             self.store.save_counts(counts)
 
+        style_strength = None
+        if session_id:
+            style_strength = self._update_style(pid, session_id, event, chosen_value, shown_values, shown_texts, current_text).strength
         return {
             "updated": True,
             "counts": {record["value"]: record["counts"] for record in touched.values()},
             "tally": {"reject_all_shows": tally["reject_all_shows"], "chosen_shows": tally["chosen_shows"]},
+            "style_strength": style_strength,
         }
 
     @staticmethod

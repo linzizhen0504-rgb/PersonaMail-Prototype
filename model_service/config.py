@@ -24,3 +24,14 @@ REJECT_THRESHOLD = 0.5
 DIMENSION_SIM_THRESHOLD = 0.75
 
 UNKNOWN_CONTEXT = "unknown"
+
+# Style preference (learned within one email; layered on top of the Beta score)
+# Decided by an offline comparison: MiniLM only, using "rewritten text minus current text" plus the value words.
+STYLE_WEIGHT = 1.5            # how far the style term can move a card's score (strength 1, relative score 1)
+STYLE_VALUE_WEIGHT = 0.5      # weight of the value-word block next to the text-change block
+STYLE_DELTA_SCALE = 0.65      # typical length of a MiniLM text-change vector, so both blocks are comparable
+STYLE_MASS_FULL = 2.0         # total evidence at which the style term reaches full strength
+STYLE_PICK_WEIGHT = 1.0       # chosen card
+STYLE_SIBLING_WEIGHT = -0.3   # cards shown next to the chosen one
+STYLE_REGENERATE_WEIGHT = -0.5
+STYLE_LEAVE_WEIGHT = -0.2

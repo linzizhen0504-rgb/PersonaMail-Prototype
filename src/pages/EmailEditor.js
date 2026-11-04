@@ -163,6 +163,61 @@ const isBlockActive = (editor, format) => {
     }
 };
 
+// Find a unit's text inside a paragraph: exact match first, then tolerant of whitespace and quote-style differences.
+// Returns {start, end} or null.
+const locateUnitText = (text, content) => {
+    if (!content) return null;
+    const exact = text.indexOf(content);
+    if (exact !== -1) return { start: exact, end: exact + content.length };
+    const escaped = content.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/[\u2018\u2019']/g, "['\u2018\u2019]")
+        .replace(/[\u201c\u201d"]/g, '["\u201c\u201d]')
+        .replace(/\s+/g, '\\s+');
+    try {
+        const match = new RegExp(escaped).exec(text);
+        return match ? { start: match.index, end: match.index + match[0].length } : null;
+    } catch (error) {
+        return null;
+    }
+};
+
+// Plain form of a text for comparing: lower case, no punctuation, single spaces
+const plainText = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+
+// How often each longer sentence occurs in the given paragraphs
+const sentenceCounts = (texts) => {
+    const counts = new Map();
+    texts.forEach(text => {
+        String(text || '').split(/(?<=[.!?\u3002\uff01\uff1f])\s*/).forEach(sentence => {
+            const key = plainText(sentence);
+            if (key.length >= 20) counts.set(key, (counts.get(key) || 0) + 1);
+        });
+    });
+    return counts;
+};
+
+// Does a rewritten unit text break the email? It must not contain another unit's text, and putting it into the
+// paragraphs must not make any sentence appear more than once. Returns a reason, or null when it is fine.
+// `paragraphs` are the editor paragraph texts, `index` the paragraph that holds the unit's old text.
+const rewriteProblem = ({ unit, oldContent, newContent, otherUnits, paragraphs, index }) => {
+    const plainNew = plainText(newContent);
+    if (plainNew.length > plainText(oldContent).length * 3 + 60) return 'is much longer than the part it replaces';
+    const leaked = otherUnits.find(other => {
+        const plainOther = plainText(other.content);
+        return plainOther.length >= 12 && plainNew.includes(plainOther);
+    });
+    if (leaked) return `includes the text of another part (${leaked.title || leaked.id})`;
+    const span = locateUnitText(paragraphs[index], oldContent);
+    if (!span) return 'text not found in the editor';
+    const after = paragraphs.slice();
+    after[index] = paragraphs[index].slice(0, span.start) + newContent + paragraphs[index].slice(span.end);
+    const before = sentenceCounts(paragraphs);
+    for (const [key, count] of sentenceCounts(after)) {
+        if (count > 1 && count > (before.get(key) || 0)) return 'repeats text that is already in the email';
+    }
+    return null;
+};
+
 // Safe node text extraction
 const getNodeText = (editor, node) => {
     try {
@@ -277,6 +332,7 @@ const EmailEditor = () => {
     valueRef.current = value;
     // Latest data for the async reject flow (state captured by a click handler goes stale while it waits)
     const combinedResultsRef = useRef([]);
+    const componentsRef = useRef([]);
     const originalTextRef = useRef('');
     // Version Cards (cond=cards) and experiment logging state
     const [cardsState, setCardsState] = useState(null);
@@ -287,6 +343,7 @@ const EmailEditor = () => {
     const previewSessionRef = useRef(null);
     const editWatchRef = useRef(null);
     combinedResultsRef.current = combinedResults;
+    componentsRef.current = components;
     originalTextRef.current = originalText;
     
     // Modal states for component change tracking
@@ -321,12 +378,25 @@ const EmailEditor = () => {
             console.warn('Could not remember the guide state:', error);
         }
     };
+    // The style preference is learned within one email: every newly generated draft starts a fresh session id, so a
+    // late event of a display from the previous draft cannot leak into it; the old session is cleared afterwards.
+    const draftVersionRef = useRef(0);
+    const styleSessionId = () => `${globalTaskId}:${draftVersionRef.current}`;
+    const startNewStyleSession = () => {
+        if (EXPERIMENT.cond !== 'cards' || !globalTaskId) return;
+        const previous = styleSessionId();
+        draftVersionRef.current += 1;
+        callModel('/reset-session', { pid: EXPERIMENT.pid, session_id: previous }).catch((resetError) => {
+            console.warn('Preference model unavailable for /reset-session:', resetError.message);
+            logEvent({ event: 'model_unavailable', endpoint: 'reset-session' });
+        });
+    };
     // Factor selections are made in the chat step first, then stay editable in the editor sidebar
     const factorSelection = useFactorSelection({
         userTask,
         userName: globalUsername,
         taskId: globalTaskId,
-        onDraftGenerated: (draft) => applyDraftText(draft),
+        onDraftGenerated: (draft) => { startNewStyleSession(); applyDraftText(draft); },
         onLoadingChange: setDraftGenerating
     });
     const powerChoice = factorSelection.selectedFactors && factorSelection.selectedFactors[POWER_FACTOR_ID]
@@ -358,6 +428,11 @@ const EmailEditor = () => {
                     children: [{ text: 'Content reset due to error. Please reload.' }],
                 },
             ];
+            try {
+                if (editor.selection) Transforms.deselect(editor); // a stale selection would crash the reset content
+            } catch (selectionError) {
+                console.warn('Could not clear the editor selection:', selectionError);
+            }
             setValue(defaultValue);
             setSelectedComponentId(null);
             setComponents([]);
@@ -790,10 +865,42 @@ const EmailEditor = () => {
             };
         });
     
+        // The position search below maps normalised text back to the editor and can drift or miss. As a safety net,
+        // find the unit's text inside a single paragraph (tolerant of whitespace and quote style) and highlight that.
+        const highlightWithinParagraph = () => {
+            let found = -1;
+            let span = null;
+            cleanValue.forEach((node, i) => {
+                if (found !== -1) return;
+                const match = locateUnitText(getNodeText(null, node), componentContent);
+                if (match) { found = i; span = match; }
+            });
+            if (found === -1) return null;
+            return cleanValue.map((node, i) => {
+                if (i !== found) return node;
+                const text = getNodeText(null, node);
+                const meta = { hasDimensions: linkedIntents.length > 0, linkedIntents, componentId };
+                const children = [];
+                if (text.slice(0, span.start)) children.push({ text: text.slice(0, span.start), ...meta });
+                children.push({ text: text.slice(span.start, span.end), highlight: true, ...meta });
+                if (text.slice(span.end)) children.push({ text: text.slice(span.end), ...meta });
+                return { ...node, children };
+            });
+        };
+        // Is the highlighted text really the unit's text?
+        const highlightMatches = (candidate) => {
+            const highlighted = candidate.map(node => (Array.isArray(node.children)
+                ? node.children.filter(child => child && child.highlight).map(child => child.text).join('') : '')).join('');
+            const plainHighlighted = plainText(highlighted);
+            const plainUnit = plainText(componentContent);
+            return plainHighlighted.length > 0 && (plainHighlighted === plainUnit
+                || plainHighlighted.includes(plainUnit) || plainUnit.includes(plainHighlighted));
+        };
+
         const position = findTextInEditor(componentContent, cleanValue);
         if (!position) {
-            console.log('Position not found, returning clean value');
-            return cleanValue;
+            console.log('Position not found, trying within paragraphs');
+            return highlightWithinParagraph() || cleanValue;
         }
     
         console.log('Found position:', position);
@@ -853,7 +960,7 @@ const EmailEditor = () => {
         console.log('Affected nodes:', affectedNodes);
         
         if (affectedNodes.length === 0) {
-            return cleanValue;
+            return highlightWithinParagraph() || cleanValue;
         }
         
         // 应用高亮到受影响的节点
@@ -927,6 +1034,10 @@ const EmailEditor = () => {
             };
         });
         
+        if (!highlightMatches(newValue)) {
+            console.log('Highlight does not match the unit text, trying within paragraphs');
+            return highlightWithinParagraph() || newValue;
+        }
         console.log('Applied highlighting, returning new value');
         return newValue;
     };
@@ -1030,6 +1141,14 @@ const EmailEditor = () => {
     };
 
         // Safe editor operation wrapper
+    // Replacing the text of a unit rebuilds its paragraph, so a selection pointing into the old leaves would be invalid
+    const deselectEditor = () => {
+        try {
+            if (editor.selection) Transforms.deselect(editor);
+        } catch (error) {
+            console.warn('Could not clear the editor selection:', error);
+        }
+    };
     const safeEditorOperation = (operation) => {
         try {
             // Clear any existing selection to prevent path errors
@@ -3044,13 +3163,11 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             const isCards = EXPERIMENT.cond === 'cards';
             const textStyle = isHighlighted && isCards ? {
                 backgroundColor: '#fff3c4',
-                border: '2px solid #f2c94c',
                 borderRadius: '4px',
                 padding: '1px 2px',
                 cursor: 'pointer'
             } : isHighlighted ? {
                 backgroundColor: '#fff3cd',
-                border: '1px solid #ffc107',
                 borderRadius: '2px',
                 padding: '1px 2px',
                 cursor: 'pointer'
@@ -3337,7 +3454,10 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         intent_dimension: cards.dimension,
         event,
         chosen_value: chosenValue,
-        shown_values: cards.items.map(i => i.value)
+        shown_values: cards.items.map(i => i.value),
+        session_id: cards.sessionId,
+        current_text: cards.currentText,
+        shown_texts: cards.items.map(i => i.content)
     }).catch((updateError) => {
         console.warn('Preference model unavailable for /update:', updateError.message);
         logEvent({
@@ -3437,32 +3557,50 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         return node ? getNodeText(null, node) : null;
     };
 
-    // cards: ask the rewriter for the version of the unit under every value of the intent, without the current value
+    // cards: ask the rewriter for the version of the unit under every value of the intent, without the current value.
+    // Versions that would duplicate or swallow other parts of the email when used (the model sometimes returns
+    // neighbouring sentences) are left out; if none is usable the rewriter is asked once more.
     const fetchVersions = async (unit, intent) => {
         const intentOthers = (unit.linkedIntents || [])
             .filter(other => other.dimension !== intent.dimension)
             .map(other => ({ dimension: other.dimension, current_value: other.current_value }));
-        const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
-            userName: globalUsername,
-            taskId: globalTaskId,
-            userTask,
-            draftLatest: originalTextRef.current,
-            componentCurrent: unit.content,
-            intentSelected: {
-                dimension: intent.dimension,
-                current_value: intent.current_value,
-                other_values: intent.other_values
-            },
-            intentOthers
-        });
-        const variations = response.data && response.data.component_variations;
-        if (!Array.isArray(variations)) throw new Error('No versions returned');
-        const seenValues = new Set();
-        return variations.filter(v => {
-            if (!v || v.intent_value === intent.current_value || typeof v.content !== 'string' || seenValues.has(v.intent_value)) return false;
-            seenValues.add(v.intent_value);
-            return true;
-        });
+        let filtered = 0;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
+                userName: globalUsername,
+                taskId: globalTaskId,
+                userTask,
+                draftLatest: originalTextRef.current,
+                componentCurrent: unit.content,
+                intentSelected: {
+                    dimension: intent.dimension,
+                    current_value: intent.current_value,
+                    other_values: intent.other_values
+                },
+                intentOthers
+            });
+            const variations = response.data && response.data.component_variations;
+            if (!Array.isArray(variations)) throw new Error('No versions returned');
+            const seenValues = new Set();
+            const versions = variations.filter(v => {
+                if (!v || v.intent_value === intent.current_value || typeof v.content !== 'string' || seenValues.has(v.intent_value)) return false;
+                seenValues.add(v.intent_value);
+                return true;
+            });
+            const paragraphs = valueRef.current.map(node => getNodeText(null, node));
+            const index = paragraphs.findIndex(text => !!locateUnitText(text, unit.content));
+            const otherUnits = combinedResultsRef.current.filter(u => u.id !== unit.id);
+            const sound = index === -1 ? versions : versions.filter(v =>
+                !rewriteProblem({ unit, oldContent: unit.content, newContent: v.content, otherUnits, paragraphs, index }));
+            filtered += versions.length - sound.length;
+            if (sound.length > 0 || versions.length === 0) {
+                sound.filtered = filtered;
+                return sound;
+            }
+        }
+        const none = [];
+        none.filtered = filtered;
+        return none;
     };
 
     // cards: rank the candidates with the preference model (random order if it is unavailable), show the
@@ -3470,22 +3608,27 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     // when the user moved on in the meantime.
     const showDisplay = async ({ unit, unitTitle, intent, candidates, trigger, requestId }) => {
         const context = logContext;
+        const sessionId = styleSessionId();
         let chosenVersions;
         let ordering;
         let mmrUsed;
+        let styleStrength = null;
         try {
             const ranked = await callModel('/rank', {
                 pid: EXPERIMENT.pid,
                 context,
                 intent_dimension: intent.dimension,
                 candidates: candidates.map(v => ({ value: v.intent_value, text: v.content })),
-                k: 3
+                k: 3,
+                session_id: sessionId,
+                current_text: unit.content
             });
             const byValue = new Map(candidates.map(v => [v.intent_value, v]));
             chosenVersions = ((ranked.data && ranked.data.values) || []).map(name => byValue.get(name)).filter(Boolean);
             if (candidates.length > 0 && chosenVersions.length === 0) throw new Error('empty ranking');
             ordering = ranked.data.ordering;
             mmrUsed = !!ranked.data.mmr_used;
+            styleStrength = ranked.data.style_strength;
         } catch (rankError) {
             console.warn('Preference model unavailable for /rank:', rankError.message);
             logEvent({
@@ -3508,6 +3651,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         if (items.length === 0) return 'empty';
         const display = {
             unitId: unit.id, unitTitle, dimension: intent.dimension, currentValue: intent.current_value, context,
+            sessionId, currentText: unit.content, styleStrength,
             items, ordering, mmrUsed, trigger,
             loading: false, error: false, regenerating: false, regenError: false, ended: false, shownAt: Date.now()
         };
@@ -3522,7 +3666,9 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             positions: items.map((item, index) => index + 1),
             ordering,
             mmr_used: mmrUsed,
-            trigger
+            trigger,
+            style_strength: styleStrength,
+            filtered_candidates: candidates.filtered || 0
         });
         return display;
     };
@@ -3632,10 +3778,13 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         }
         const intentSelected = { dimension: cards.dimension, current_value: item.value, other_values: otherValues };
 
+        // Line breaks inside a unit would throw off the position search; paragraphs stay as they are
+        const newContent = item.content.replace(/\s*\n+\s*/g, ' ').trim();
         const oldNodeText = getUnitNodeText(cards.unitId, value);
-        const replacedText = oldNodeText === null ? item.content : oldNodeText.replace(component.content, item.content);
+        const replacedText = oldNodeText === null ? newContent : oldNodeText.replace(component.content, newContent);
 
-        const applied = replaceComponentText(cards.unitId, item.content, intentSelected);
+        deselectEditor();
+        const applied = replaceComponentText(cards.unitId, newContent, intentSelected);
         if (!applied) return;
 
         const shownValues = cards.items.map(i => i.value);
@@ -3658,6 +3807,220 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             startedAt: Date.now(),
             entered: false
         };
+
+        // The same intent can drive other units too: bring them in line with the new value
+        propagateIntentChange({
+            sourceUnitId: cards.unitId,
+            sourceTitle: cards.unitTitle,
+            sourceOldContent: component.content,
+            sourceNewContent: newContent,
+            intentSelected,
+            chosenValue: item.value
+        });
+    };
+
+    // cards: write the rewritten texts of the other units into the editor and sync their intent state.
+    // Works from the latest data (refs) in one pass, because it runs after an async wait.
+    const applyOtherUnitTexts = (updates, intentSelected) => {
+        // The user may be typing in the editor while the rewrites arrive: remember the caret as an offset in its
+        // paragraph so it can be put back after the paragraphs are rebuilt (a stale selection would crash Slate).
+        let cursor = null;
+        let wasFocused = false;
+        try {
+            const sel = editor.selection;
+            if (sel && Range.isCollapsed(sel) && sel.anchor.path.length === 2) {
+                const node = editor.children[sel.anchor.path[0]];
+                if (node && Array.isArray(node.children)) {
+                    const before = node.children.slice(0, sel.anchor.path[1]).reduce((n, child) => n + ((child && child.text) || '').length, 0);
+                    cursor = { index: sel.anchor.path[0], offset: before + sel.anchor.offset };
+                    wasFocused = ReactEditor.isFocused(editor);
+                }
+            }
+        } catch (cursorError) {
+            cursor = null;
+        }
+        let workingValue = valueRef.current;
+        let draft = originalTextRef.current;
+        const applied = [];
+        const rejected = {};
+        updates.forEach(({ unit, newContent }) => {
+            const current = componentsRef.current.find(c => c.id === unit.id);
+            const oldContent = current ? current.content : unit.content;
+            let span = null;
+            const index = workingValue.findIndex(node => {
+                span = locateUnitText(getNodeText(null, node), oldContent);
+                return !!span;
+            });
+            if (index === -1) { // the text was edited away or overwritten in the meantime
+                rejected[unit.id] = 'locate: text not found in the editor';
+                return;
+            }
+            const problem = rewriteProblem({
+                unit, oldContent, newContent,
+                otherUnits: combinedResultsRef.current.filter(u => u.id !== unit.id),
+                paragraphs: workingValue.map(node => getNodeText(null, node)),
+                index
+            });
+            if (problem) { // never write a rewrite that would duplicate or swallow other parts of the email
+                rejected[unit.id] = `check: ${problem}`;
+                return;
+            }
+            const latestUnit = combinedResultsRef.current.find(u => u.id === unit.id) || unit;
+            const linkedIntents = (latestUnit.linkedIntents || []).map(i => i.dimension === intentSelected.dimension
+                ? { ...i, current_value: intentSelected.current_value, other_values: intentSelected.other_values } : i);
+            if (cursor && cursor.index === index) {
+                if (span.end <= cursor.offset) {
+                    cursor.offset += newContent.length - (span.end - span.start);
+                } else if (span.start < cursor.offset) {
+                    cursor.offset = span.start + Math.min(cursor.offset - span.start, newContent.length);
+                }
+            }
+            workingValue = workingValue.map((node, i) => {
+                if (i !== index) return node;
+                const keep = Array.isArray(node.children) ? node.children.find(child => child && child.highlight) : null;
+                return {
+                    ...node,
+                    children: [{
+                        text: getNodeText(null, node).slice(0, span.start) + newContent + getNodeText(null, node).slice(span.end),
+                        componentId: keep ? keep.componentId : unit.id,
+                        ...(keep ? { highlight: true } : {}),
+                        hasDimensions: linkedIntents.length > 0,
+                        linkedIntents
+                    }]
+                };
+            });
+            const draftSpan = locateUnitText(draft, oldContent);
+            if (draftSpan) draft = draft.slice(0, draftSpan.start) + newContent + draft.slice(draftSpan.end);
+            applied.push({ id: unit.id, title: unit.title, oldContent, newContent });
+        });
+        applied.rejected = rejected;
+        if (applied.length === 0) return applied;
+
+        deselectEditor();
+        setValue(workingValue);
+        setEditorKey(prev => prev + 1);
+        if (cursor && wasFocused) {
+            setTimeout(() => {
+                try {
+                    const node = workingValue[cursor.index];
+                    if (!node || !Array.isArray(node.children)) return;
+                    let remaining = cursor.offset;
+                    let leaf = 0;
+                    while (leaf < node.children.length - 1 && remaining > ((node.children[leaf] && node.children[leaf].text) || '').length) {
+                        remaining -= ((node.children[leaf] && node.children[leaf].text) || '').length;
+                        leaf += 1;
+                    }
+                    const point = { path: [cursor.index, leaf], offset: Math.min(remaining, ((node.children[leaf] && node.children[leaf].text) || '').length) };
+                    ReactEditor.focus(editor);
+                    Transforms.select(editor, { anchor: point, focus: point });
+                } catch (restoreError) {
+                    console.warn('Could not restore the caret:', restoreError);
+                }
+            }, 150);
+        }
+        setComponents(prev => prev.map(c => {
+            const a = applied.find(x => x.id === c.id);
+            return a ? { ...c, content: a.newContent } : c;
+        }));
+        setCombinedResults(prev => prev.map(u => {
+            const a = applied.find(x => x.id === u.id);
+            if (!a) return u;
+            return {
+                ...u,
+                content: a.newContent,
+                linkedIntents: (u.linkedIntents || []).map(i => i.dimension === intentSelected.dimension
+                    ? { ...i, current_value: intentSelected.current_value, other_values: intentSelected.other_values } : i)
+            };
+        }));
+        setOriginalText(draft);
+        axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: draft })
+            .catch(error => console.error('Error saving draft to sessionData:', error));
+        // Keep the edit watch of the used unit consistent when its paragraph also held one of these units
+        const watch = editWatchRef.current;
+        if (watch) {
+            applied.forEach(a => {
+                const watchSpan = locateUnitText(watch.replacedText, a.oldContent);
+                if (watchSpan) watch.replacedText = watch.replacedText.slice(0, watchSpan.start) + a.newContent + watch.replacedText.slice(watchSpan.end);
+            });
+        }
+        return applied;
+    };
+
+    // cards: after Use, every other unit linked to the same intent gets the new intent value too: its text is
+    // rewritten for that value (in parallel) and written into the editor, so nothing has to be redone unit by unit.
+    const propagateIntentChange = async ({ sourceUnitId, sourceTitle, sourceOldContent, sourceNewContent, intentSelected, chosenValue }) => {
+        const started = Date.now();
+        const targets = combinedResultsRef.current.filter(unit => unit.id !== sourceUnitId
+            && (unit.linkedIntents || []).some(i => i.dimension === intentSelected.dimension && i.current_value !== intentSelected.current_value));
+        if (targets.length === 0) return;
+        const appliedNotice = `Applied "${chosenValue}" to ${sourceTitle}.`;
+        setNotice(`${appliedNotice} Updating ${targets.length} other part${targets.length > 1 ? 's' : ''} that use this intent…`);
+        const draftBase = originalTextRef.current.replace(sourceOldContent, sourceNewContent);
+        const results = await Promise.allSettled(targets.map(async (unit) => {
+            const intentOthers = (unit.linkedIntents || [])
+                .filter(i => i.dimension !== intentSelected.dimension)
+                .map(i => ({ dimension: i.dimension, current_value: i.current_value }));
+            // The model sometimes returns more than the unit (neighbouring sentences); ask again once if so
+            let lastProblem = 'No version returned';
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
+                    userName: globalUsername,
+                    taskId: globalTaskId,
+                    userTask,
+                    draftLatest: draftBase,
+                    componentCurrent: unit.content,
+                    intentSelected: {
+                        dimension: intentSelected.dimension,
+                        current_value: intentSelected.current_value,
+                        other_values: intentSelected.other_values
+                    },
+                    intentOthers
+                });
+                const variation = ((response.data && response.data.component_variations) || [])
+                    .find(v => v && v.intent_value === intentSelected.current_value);
+                if (!variation || typeof variation.content !== 'string' || !variation.content.trim()) continue;
+                const cleaned = variation.content.replace(/\s*\n+\s*/g, ' ').trim(); // keep it inside its paragraph
+                const paragraphs = valueRef.current.map(node => getNodeText(null, node));
+                const current = componentsRef.current.find(c => c.id === unit.id);
+                const oldContent = current ? current.content : unit.content;
+                const index = paragraphs.findIndex(text => !!locateUnitText(text, oldContent));
+                if (index === -1) { lastProblem = 'locate: text not found in the editor'; break; }
+                const problem = rewriteProblem({
+                    unit, oldContent, newContent: cleaned,
+                    otherUnits: combinedResultsRef.current.filter(u => u.id !== unit.id),
+                    paragraphs, index
+                });
+                if (!problem) return { unit, newContent: cleaned };
+                lastProblem = `check: ${problem}`;
+            }
+            throw new Error(lastProblem);
+        }));
+        const rewritten = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+        const applied = applyOtherUnitTexts(rewritten, intentSelected);
+        const appliedIds = new Set(applied.map(a => a.id));
+        const failed = targets.filter(unit => !appliedIds.has(unit.id));
+        const failedReasons = {};
+        targets.forEach((unit, i) => {
+            if (appliedIds.has(unit.id)) return;
+            failedReasons[unit.id] = results[i].status === 'rejected'
+                ? String((results[i].reason && results[i].reason.message) || results[i].reason)
+                : (applied.rejected && applied.rejected[unit.id]) || 'locate: text not found in the editor';
+        });
+        logEvent({
+            unit_id: sourceUnitId,
+            unit_title: sourceTitle,
+            intent_dimension: intentSelected.dimension,
+            event: 'intent_propagated',
+            chosen_value: chosenValue,
+            updated_units: applied.map(a => a.id),
+            failed_units: failed.map(unit => unit.id),
+            failed_reasons: failedReasons,
+            duration_ms: Date.now() - started
+        });
+        const names = (list) => list.map(x => x.title || x.id).join(', ');
+        setNotice(prev => (prev && prev.startsWith(appliedNotice)
+            ? `${appliedNotice}${applied.length ? ` Also updated: ${names(applied)}.` : ''}${failed.length ? ` Couldn't update: ${names(failed)}.` : ''}`
+            : prev));
     };
 
     // cards: Regenerate. Ends the display, then asks the model whether the intent keeps being passed over:
@@ -3713,7 +4076,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 positions: restored.items.map((item, index) => index + 1),
                 ordering: restored.ordering,
                 mmr_used: restored.mmrUsed,
-                trigger: 'regenerate'
+                trigger: 'regenerate',
+                style_strength: restored.styleStrength
             });
         };
 

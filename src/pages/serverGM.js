@@ -406,10 +406,27 @@ function alignVariationValues(parsedData, intentSelected) {
     if (!Array.isArray(variations) || !intentSelected) return parsedData;
     const expected = [intentSelected.current_value, ...(intentSelected.other_values || [])];
     const byName = new Map(expected.map(value => [normalizeName(value), value]));
-    variations.forEach((variation, index) => {
-        variation.intent_value = byName.get(normalizeName(variation.intent_value)) || expected[index] || variation.intent_value;
+    variations.forEach(variation => {
+        variation.intent_value = byName.get(normalizeName(variation.intent_value)) || variation.intent_value;
     });
     return parsedData;
+}
+
+// The model has to label every version with exactly one of the intent values it was asked about. Small local models
+// often copy the template's placeholder names instead; guessing the value from the position then attaches a version
+// to the wrong value, so such replies are rejected.
+function variationsMatchValues(parsedData, expectedValues) {
+    const variations = parsedData && parsedData.component_variations;
+    if (!Array.isArray(variations) || variations.length !== expectedValues.length) return false;
+    const wanted = new Set(expectedValues.map(normalizeName));
+    const seen = new Set();
+    return variations.every(variation => {
+        if (!variation || typeof variation.content !== 'string' || !variation.content.trim()) return false;
+        const key = normalizeName(variation.intent_value);
+        if (!wanted.has(key) || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 }
 
 async function sendRequestToGemini(prompt, options = {}) {
@@ -1829,17 +1846,41 @@ app.post('/intent-change-rewriter', async (req, res) => {
         .replace('{{INTENT_SELECTED}}', JSON.stringify(intentSelected, null, 2))
         .replace('{{INTENT_OTHERS}}', JSON.stringify(intentOthers, null, 2));
 
-    try {
-        const responseText = await sendRequestToGemini(prompt);
+    // Put the real intent values into the output template (instead of its placeholder names) and say exactly which
+    // labels are expected
+    const expectedValues = [intentSelected.current_value, ...(intentSelected.other_values || [])];
+    const placeholders = ['current_intent_value', 'first_alternative_intent_value', 'second_alternative_intent_value', 'third_alternative_intent_value'];
+    let labelledPrompt = prompt;
+    placeholders.forEach((placeholder, index) => {
+        if (index < expectedValues.length) {
+            labelledPrompt = labelledPrompt.split(`"${placeholder}"`).join(JSON.stringify(String(expectedValues[index])));
+        }
+    });
+    labelledPrompt += `\n\n**Important:** "component_variations" must contain exactly ${expectedValues.length} items, one for each of these intent values, and every "intent_value" must be copied exactly from this list (never a placeholder name): ${JSON.stringify(expectedValues)}.`;
 
-        if (!responseText) {
-            return res.status(500).json({ error: 'AI response is empty' });
+    try {
+        let parsedData = null;
+        for (let attempt = 1; attempt <= 3 && !parsedData; attempt++) {
+            const responseText = await sendRequestToGemini(labelledPrompt);
+            if (!responseText) continue;
+            let candidate;
+            try {
+                candidate = parseModelJson(responseText);
+            } catch (parseError) {
+                console.warn(`Intent Change Rewriter: reply is not JSON (attempt ${attempt}/3)`);
+                continue;
+            }
+            if (variationsMatchValues(candidate, expectedValues)) {
+                parsedData = candidate;
+            } else {
+                console.warn(`Intent Change Rewriter: versions do not match the requested values (attempt ${attempt}/3)`);
+            }
+        }
+        if (!parsedData) {
+            return res.status(500).json({ error: 'AI response did not match the requested intent values' });
         }
 
-        const sanitizedResponse = responseText.replace(/```json|```/g, '').trim();
-        const parsedData = JSON.parse(sanitizedResponse);
-
-        res.json(ollamaModel ? alignVariationValues(parsedData, intentSelected) : parsedData);
+        res.json(alignVariationValues(parsedData, intentSelected));
     } catch (error) {
         console.error('Error in Intent Change Rewriter:', error);
         res.status(500).json({ error: 'Error in Intent Change Rewriter' });
