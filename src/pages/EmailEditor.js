@@ -485,6 +485,7 @@ const EmailEditor = () => {
             });
         }
 
+        deselectEditor(); // the old selection may point past the end of the new content
         setValue(slateContent);
         setEditorKey(prev => prev + 1);
 
@@ -597,12 +598,14 @@ const EmailEditor = () => {
                     };
                 });
 
+                deselectEditor(); // switching task keeps the editor, so the old selection would outlive the old content
                 setValue(validatedContent);
                 setEditorKey(prev => prev + 1);
                 setContentLoaded(true);
             } catch (error) {
                 console.error('Failed to load draft:', error);
                 setHasDraft(false);
+                deselectEditor();
                 setValue([
                     {
                         type: 'paragraph',
@@ -3613,6 +3616,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         let ordering;
         let mmrUsed;
         let styleStrength = null;
+        let rankScores = null;
+        let styleScores = null;
         try {
             const ranked = await callModel('/rank', {
                 pid: EXPERIMENT.pid,
@@ -3629,6 +3634,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             ordering = ranked.data.ordering;
             mmrUsed = !!ranked.data.mmr_used;
             styleStrength = ranked.data.style_strength;
+            rankScores = ranked.data.scores || null;
+            styleScores = ranked.data.style_scores || null;
         } catch (rankError) {
             console.warn('Preference model unavailable for /rank:', rankError.message);
             logEvent({
@@ -3649,9 +3656,20 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             parts: diffWords(unit.content, v.content)
         }));
         if (items.length === 0) return 'empty';
+        // Every candidate that went to /rank, with its position among the shown cards (null if not shown), for offline replay
+        const shownValues = items.map(item => item.value);
+        const candidateLog = candidates.map(v => {
+            const index = shownValues.indexOf(v.intent_value);
+            return {
+                value: v.intent_value,
+                original_text: unit.content,
+                rewritten_text: v.content,
+                position: index >= 0 ? index + 1 : null
+            };
+        });
         const display = {
             unitId: unit.id, unitTitle, dimension: intent.dimension, currentValue: intent.current_value, context,
-            sessionId, currentText: unit.content, styleStrength,
+            sessionId, currentText: unit.content, styleStrength, candidateLog, rankScores, styleScores,
             items, ordering, mmrUsed, trigger,
             loading: false, error: false, regenerating: false, regenError: false, ended: false, shownAt: Date.now()
         };
@@ -3668,7 +3686,10 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             mmr_used: mmrUsed,
             trigger,
             style_strength: styleStrength,
-            filtered_candidates: candidates.filtered || 0
+            filtered_candidates: candidates.filtered || 0,
+            candidates: candidateLog,
+            rank_scores: rankScores,
+            style_scores: styleScores
         });
         return display;
     };
@@ -4077,7 +4098,10 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 ordering: restored.ordering,
                 mmr_used: restored.mmrUsed,
                 trigger: 'regenerate',
-                style_strength: restored.styleStrength
+                style_strength: restored.styleStrength,
+                candidates: restored.candidateLog,
+                rank_scores: restored.rankScores,
+                style_scores: restored.styleScores
             });
         };
 
