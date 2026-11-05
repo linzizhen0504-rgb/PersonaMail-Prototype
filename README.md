@@ -128,8 +128,10 @@ The backend writes one JSON line per event to `src/data/logs/{pid}.jsonl` throug
 
 ### 1. Clone and install
 
+This version lives on the `prototype2` branch. The default `main` branch holds the earlier interface-only prototype, so clone with `-b prototype2`:
+
 ```bash
-git clone https://github.com/linzizhen0504-rgb/PersonaMail-Prototype.git
+git clone -b prototype2 https://github.com/linzizhen0504-rgb/PersonaMail-Prototype.git
 cd PersonaMail-Prototype
 npm install
 ```
