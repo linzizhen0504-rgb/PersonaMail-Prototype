@@ -128,13 +128,13 @@ The backend writes one JSON line per event to `src/data/logs/{pid}.jsonl` throug
 
 ### 1. Clone and install
 
-This version lives on the `prototype2` branch. The default `main` branch holds the earlier interface-only prototype, so clone with `-b prototype2`:
-
 ```bash
-git clone -b prototype2 https://github.com/linzizhen0504-rgb/PersonaMail-Prototype.git
+git clone https://github.com/linzizhen0504-rgb/PersonaMail-Prototype.git
 cd PersonaMail-Prototype
 npm install
 ```
+
+The `main` branch is this version. The earlier interface-only prototype is kept on the `prototype1` branch.
 
 ### 2. Add your Gemini API key
 
@@ -183,6 +183,8 @@ uvicorn app:app --port 3003
 
 Restart the backend after changing `serverGM.js` or `.env`.
 
+When all three are running, open **http://localhost:3000/?cond=cards&pid=P01** in the browser. Use `?cond=baseline` instead for the original interface. Without `cond` the app runs `baseline`. If the intents show as radio buttons with an Apply button instead of pills and cards, the app is in `baseline`.
+
 ### 5. Test the model service
 
 ```bash
@@ -192,6 +194,8 @@ pytest -m slow    # also loads the real MiniLM model
 ```
 
 ## Using the Prototype
+
+Open the app with a condition in the URL: `http://localhost:3000/?cond=cards&pid=P01` for Version Cards, or `?cond=baseline` for the original interface. Without `cond` the app runs `baseline`, which looks like the earlier prototype, and the condition is remembered until the tab is closed.
 
 1. Enter a username at the top right.
 2. Describe the email you need and send.
