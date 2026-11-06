@@ -159,6 +159,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+On Windows, use `python -m venv .venv` and activate with `.venv\Scripts\activate` (PowerShell: `.venv\Scripts\Activate.ps1`) instead of `source .venv/bin/activate`. This applies every time the guide says to activate the environment.
+
 The first start downloads `all-MiniLM-L6-v2` once.
 
 ### 4. Run
