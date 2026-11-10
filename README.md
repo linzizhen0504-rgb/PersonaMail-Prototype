@@ -28,7 +28,7 @@ We started from the authors' released code and redesigned the interface. The ori
 | **Factor Exploration Panel** (Section 4.1): the curated list of communication factors in four categories — relationship, demography, communication context, risk mitigation | Kept unchanged. The factor list, options and selection logic are the authors'. |
 | **Communicative Units** (Section 4.2.1): splitting the email into functional components such as Opening Salutation, Statement of Purpose, Call to Action | Kept, including the authors' prompt. |
 | **Intents and intent-driven modification** (Sections 4.2.2–4.2.3): the Intent Analyzer, Unit–Intent Linker and Intent-Driven Rewriter pipeline | Kept, with the changes listed under "Intent pipeline" below. |
-| **Adaptive Stylebook and QuickFix** (Section 4.3.2), and the local AI tools (rewrite, expand, shorten) | Kept unchanged in the `baseline` condition. In the `cards` condition the old selection toolbar is replaced by the "Describe changes" box (see below), which uses the authors' rewrite prompt. |
+| **Adaptive Stylebook and QuickFix** (Section 4.3.2), and the local AI tools (rewrite, expand, shorten) | Not used. The old selection toolbar is replaced by the "Describe changes" box (see below), which uses the authors' rewrite prompt. |
 | The prompt templates in `public/data/Prompts/` and the Express backend `src/pages/serverGM.js` | Kept, with one new prompt and a few new or changed endpoints. |
 
 ### What we do not use
@@ -37,8 +37,6 @@ We started from the authors' released code and redesigned the interface. The ori
 - **The Doubao API.** It was only used to generate anchor images, so it is no longer needed. You do not need a Doubao key, and `serverDB.js` does not need to run.
 
 ## What We Redesigned
-
-The redesign applies to both conditions of the study (see "The A/B Experiment"), unless a point says `cards`. The `baseline` condition keeps the original editor behaviour.
 
 ### One page instead of three
 
@@ -78,23 +76,9 @@ The draft, its components and the intents are made in one go. While they are mad
 - Every component is linked to at least one intent. The original prompt deliberately avoids over-linking, which often left components with no intent to adjust.
 - Model output that is not valid JSON is repaired or requested again instead of failing silently.
 
-## The A/B Experiment
+## Version Cards
 
-The app supports a between-subjects study with two conditions, chosen by URL parameters:
-
-```
-http://localhost:3000/?cond=baseline&pid=P01
-http://localhost:3000/?cond=cards&pid=P01
-```
-
-`cond` defaults to `baseline`. The URL overrides what is stored in the session, and `pid` identifies the participant in the logs.
-
-| Condition | Editor and intent UI |
-|---|---|
-| `baseline` | The original system: the **Generate Components** and **Reset Editor** buttons, the selection toolbar, radio buttons for the intent values, a Modification Preview and an Apply button. Behaviour is unchanged. |
-| `cards` | The editor described above, and **Version Cards**: each intent is a pill; clicking a pill shows up to three cards, with the sentences that differ from the current text in green. **Use** applies a card; **Regenerate** asks for new versions. |
-
-Participants never see anything about the preference model.
+The app has one interface. Each intent is a pill; clicking a pill shows up to three cards, with the sentences that differ from the current text in green. **Use** applies a card; **Regenerate** asks for new versions. Add `?pid=P01` to the URL to identify the participant in the logs. Participants never see anything about the preference model.
 
 ### Version Cards behaviour
 
@@ -144,10 +128,8 @@ CORS allows `localhost:3000` and `127.0.0.1:3000`. If the service is unreachable
 
 The backend writes one JSON line per event to `src/data/logs/{pid}.jsonl` through `POST /log-event` (ignored by git).
 
-- `cards`:
-  - Versions: `cards_shown` (context, ordering, `mmr_used`, trigger, `style_strength`, filtered candidates), `pick`, `regenerate`, `leave`, `edit_done` (text edited after Use, for analysis only), `values_regenerated`, `versions_regenerated`, `regenerate_failed`, `model_unavailable`, `intent_propagated` (updated and failed units).
-  - Editor: `unit_click_select` (a unit was selected by clicking it), `selection_rewrite_requested`, `selection_rewrite_applied`, `selection_rewrite_discarded`, `selection_rewrite_undone`, `selection_rewrite_redone` (the Describe changes box; `trigger` is `click` or `selection`), `copy_section` (subject or body copied), `placeholders_applied` (the labels of the filled fields and of the ones that were not used; the typed values are not logged), `placeholder_deleted` (the label of a placeholder removed from the email with its trash icon).
-- `baseline`: `preview_shown`, `apply`, `leave`.
+- Versions: `cards_shown` (context, ordering, `mmr_used`, trigger, `style_strength`, filtered candidates), `pick`, `regenerate`, `leave`, `edit_done` (text edited after Use, for analysis only), `values_regenerated`, `versions_regenerated`, `regenerate_failed`, `model_unavailable`, `intent_propagated` (updated and failed units).
+- Editor: `unit_click_select` (a unit was selected by clicking it), `selection_rewrite_requested`, `selection_rewrite_applied`, `selection_rewrite_discarded`, `selection_rewrite_undone`, `selection_rewrite_redone` (the Describe changes box; `trigger` is `click` or `selection`), `copy_section` (subject or body copied), `placeholders_applied` (the labels of the filled fields and of the ones that were not used; the typed values are not logged), `placeholder_deleted` (the label of a placeholder removed from the email with its trash icon).
 
 `model_service/build_priors.py --pids P01 P02` turns logs into `priors.json`, and `convert_legacy_data.py` converts counts from the older three-outcome format.
 
@@ -175,9 +157,9 @@ The `.env` file is ignored by git, so your key stays on your machine.
 
 Optional: to run on a local [Ollama](https://ollama.com) model instead of Gemini, also add `OLLAMA_MODEL=<model name>` and start `ollama serve`. Leave it out to use Gemini. Local 7B models rewrite less reliably than Gemini; we used `qwen2.5:7b` for testing only.
 
-### 3. Set up the preference model service (`cards` condition)
+### 3. Set up the preference model service
 
-Python 3.10 or newer is needed. The `baseline` condition does not use this service.
+Python 3.10 or newer is needed.
 
 ```bash
 cd model_service
@@ -205,14 +187,14 @@ node src/pages/serverGM.js
 ```
 
 ```bash
-# Terminal 3: preference model service, port 3003 (cards condition)
+# Terminal 3: preference model service, port 3003
 cd model_service && source .venv/bin/activate
 uvicorn app:app --port 3003
 ```
 
 Restart the backend after changing `serverGM.js` or `.env`.
 
-When all three are running, open **http://localhost:3000/?cond=cards&pid=P01** in the browser. Use `?cond=baseline` instead for the original interface. Without `cond` the app runs `baseline`. If the intents show as radio buttons with an Apply button instead of pills and cards, the app is in `baseline`.
+When all three are running, open **http://localhost:3000/?pid=P01** in the browser.
 
 ### 5. Test the model service
 
@@ -224,15 +206,14 @@ pytest -m slow    # also loads the real MiniLM model
 
 ## Using the Prototype
 
-Open the app with a condition in the URL: `http://localhost:3000/?cond=cards&pid=P01` for Version Cards, or `?cond=baseline` for the original interface. Without `cond` the app runs `baseline`, and the condition is remembered until the tab is closed.
+Open `http://localhost:3000/?pid=P01` (`pid` identifies the participant in the logs).
 
 1. Enter a username at the top right.
 2. Describe the email you need and send.
 3. Choose a saved template or select the factors that matter, then click **Generate Email Draft**.
-4. In `cards`, wait for the email and its components to appear together. In `baseline`, click **Generate Components** to split the email into components.
+4. Wait for the email and its components to appear together.
 5. Edit the text directly, or change the options in the sidebar, fill in the information table and click **Regenerate with These Options** for a new draft.
-6. In `cards`, click a unit to see its intents (the first one opens at once), click an intent pill to switch, and **Use** one of the cards or **Regenerate** it. Click the highlighted unit, or select text, to ask the AI for a change in your own words. After editing the email by hand, click **Regenerate** next to Email Components to rebuild the components.
-7. In `baseline`, select a component, choose another value for an intent, preview the rewrite and click **Apply**.
+6. Click a unit to see its intents (the first one opens at once), click an intent pill to switch, and **Use** one of the cards or **Regenerate** it. Click the highlighted unit, or select text, to ask the AI for a change in your own words. After editing the email by hand, click **Regenerate** next to Email Components to rebuild the components.
 
 ## Notes
 

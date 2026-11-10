@@ -3,7 +3,7 @@ import { Card, Input } from 'antd';
 import { ClearOutlined, DeleteOutlined } from '@ant-design/icons';
 import { SIDEBAR_TITLE_STYLE, SIDEBAR_SECTION_GAP, SidebarToggle, HoverIconButton } from './FactorPanel';
 
-// cards condition: table of the [bracketed] information a draft still asks for, shown at the top of the sidebar.
+// Table of the [bracketed] information a draft still asks for, shown at the top of the sidebar.
 // It only draws; EmailEditor finds the placeholders and puts the values into the draft that "Regenerate with These Options" makes.
 const PlaceholderTable = ({ rows, onChange, onDelete, onClearAll, canClear, generating = false }) => {
     const [open, setOpen] = useState(true); // open at first, like the other sections of the sidebar

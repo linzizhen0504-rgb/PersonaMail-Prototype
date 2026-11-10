@@ -4,7 +4,7 @@ import { ArrowUpOutlined, LoadingOutlined } from '@ant-design/icons';
 // Corner radius shared by the intent cards (.vc-card), the intent tags and this box
 export const CARD_BORDER_RADIUS = '10px';
 
-// cards condition: floating "Describe changes" box shown under a text selection. It only draws; EmailEditor decides when
+// Floating "Describe changes" box shown under a text selection. It only draws; EmailEditor decides when
 // it is shown, sends the request and applies the result.
 const SelectionRewriteBox = React.forwardRef(function SelectionRewriteBox(
     { top, left, width, status, prompt, onPromptChange, onSubmit, newText, errorMessage, notice, onAccept, onDiscard },

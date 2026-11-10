@@ -338,9 +338,8 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
     };
 };
 
-// variant "chat": two-column factor cards inside the chat step; variant "sidebar": single column in the editor sidebar
-// cardsLayout (sidebar only): Template and the option groups share one collapsible section with Update / Add / Reset, and
-// the template buttons at the bottom are left out; topSlot is shown above the request.
+// variant "chat": two-column factor cards inside the chat step; variant "sidebar": single column in the editor sidebar, where
+// Template and the option groups share one collapsible section with Update / Add / Reset; topSlot is shown above the request.
 // Section titles of the cards sidebar: lighter than the option text below them
 export const SIDEBAR_TITLE_STYLE = { fontWeight: 400, fontSize: '14px', color: '#8a9099' };
 
@@ -377,7 +376,7 @@ export const SidebarToggle = ({ open, onClick, what }) => (
     />
 );
 
-const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGenerate, onGenerate, cardsLayout = false, topSlot = null }) => {
+const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGenerate, onGenerate, topSlot = null }) => {
     const {
         factorData, setFactorData,
         selectedValues, setSelectedValues,
@@ -773,108 +772,88 @@ const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGe
         );
     }
 
-    if (cardsLayout) {
-        const openAddTemplate = () => {
-            setTemplateName('');
-            setSaveTemplateModal(true);
-        };
-        return (
-            <div className="factor-panel factor-panel-sidebar" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                {/* The "Email Draft Editor" title row is 40px high under 24px of padding, so its centre is 44px below the top; the first row here is 20px high, so 34px of padding puts the "Information to fill" title on the same centre line */}
-                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '34px 16px 16px' }}>
-                    {topSlot}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                            <div style={SIDEBAR_TITLE_STYLE}>Request</div>
-                            <SidebarToggle open={requestOpen} onClick={() => setRequestOpen(open => !open)} what="request" />
-                        </div>
-                        <HoverIconButton
-                            icon={<CopyOutlined />}
-                            label="Copy"
-                            disabled={!userTask}
-                            onClick={async () => {
-                                try {
-                                    await navigator.clipboard.writeText(userTask || '');
-                                    message.success('Request copied');
-                                } catch (error) {
-                                    message.error('Could not copy to the clipboard');
-                                }
-                            }}
-                        />
-                    </div>
-                    {requestOpen && (
-                        // The same white card as the table of Information to fill
-                        <Card variant="borderless" styles={{ body: { padding: 0 } }} style={{ overflow: 'hidden' }}>
-                            <div className="factor-panel-task" style={{ maxHeight: '140px', overflowY: 'auto', padding: '8px 16px', fontSize: '14px', lineHeight: 1.5715, color: 'rgba(0, 0, 0, 0.88)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                                {userTask}
-                            </div>
-                        </Card>
-                    )}
-                    <div style={{ marginTop: SIDEBAR_SECTION_GAP }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center' }}>
-                                <div style={SIDEBAR_TITLE_STYLE}>Template</div>
-                                <SidebarToggle open={templateOpen} onClick={() => setTemplateOpen(open => !open)} what="templates and options" />
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <HoverIconButton
-                                    icon={<SaveOutlined />}
-                                    label="Update"
-                                    onClick={handleUpdateTemplate}
-                                    disabled={!selectedTemplate}
-                                    title={selectedTemplate ? `Save the current options into "${selectedTemplate}"` : 'Select a template first'}
-                                />
-                                <HoverIconButton icon={<PlusOutlined />} label="Add" onClick={openAddTemplate} title="Save the current options as a new template" />
-                                <HoverIconButton
-                                    icon={<UndoOutlined />}
-                                    label="Reset"
-                                    onClick={handleResetTemplate}
-                                    title={selectedTemplate ? `Restore the options of "${selectedTemplate}"` : 'Clear all options'}
-                                />
-                            </div>
-                        </div>
-                        {templateOpen && (
-                            <div>
-                                {/* The template select looks like the white cards of Request and Information to fill */}
-                                <div className="template-select-card">{templateSelectControl}</div>
-                                <style>{`
-                                    .factor-grid-cards .ant-card-head-title { font-size: 14px; }
-                                    .factor-grid-cards .ant-row { width: calc(100% + 16px) !important; }
-                                    .template-select-card .ant-select { height: 40px !important; }
-                                    .template-select-card .ant-select .ant-select-selector { height: 40px !important; padding: 0 16px !important; align-items: center;
-                                        background: #fff !important; border: 0 !important; border-radius: 8px !important;
-                                        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02) !important; }
-                                    .template-select-card .ant-select .ant-select-selection-item,
-                                    .template-select-card .ant-select .ant-select-selection-placeholder { line-height: 40px !important; padding-inline-end: 24px; }
-                                    .template-select-card .ant-select .ant-select-selection-placeholder { color: rgba(0, 0, 0, 0.45) !important; }
-                                    .template-select-card .ant-select .ant-select-selection-item { color: rgba(0, 0, 0, 0.88) !important; }
-                                    .template-select-card .ant-select .ant-select-arrow { inset-inline-end: 16px; color: rgba(0, 0, 0, 0.45); }
-                                `}</style>
-                                <div className="factor-grid-cards" style={{ marginTop: '12px' }}>{factorGrid}</div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 16px', borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
-                    {generateButton}
-                </div>
-                {templateModal}
-            </div>
-        );
-    }
-
+    const openAddTemplate = () => {
+        setTemplateName('');
+        setSaveTemplateModal(true);
+    };
     return (
         <div className="factor-panel factor-panel-sidebar" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '16px' }}>
-                <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#333', marginBottom: '6px' }}>Request</div>
-                <div className="ChatMessage_Assistant_Content_Text factor-panel-task" style={{ maxHeight: '140px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {userTask}
+            {/* The "Email Draft Editor" title row is 40px high under 24px of padding, so its centre is 44px below the top; the first row here is 20px high, so 34px of padding puts the "Information to fill" title on the same centre line */}
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '34px 16px 16px' }}>
+                {topSlot}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <div style={SIDEBAR_TITLE_STYLE}>Request</div>
+                        <SidebarToggle open={requestOpen} onClick={() => setRequestOpen(open => !open)} what="request" />
+                    </div>
+                    <HoverIconButton
+                        icon={<CopyOutlined />}
+                        label="Copy"
+                        disabled={!userTask}
+                        onClick={async () => {
+                            try {
+                                await navigator.clipboard.writeText(userTask || '');
+                                message.success('Request copied');
+                            } catch (error) {
+                                message.error('Could not copy to the clipboard');
+                            }
+                        }}
+                    />
                 </div>
-                {templateSelect}
-                {factorGrid}
+                {requestOpen && (
+                    // The same white card as the table of Information to fill
+                    <Card variant="borderless" styles={{ body: { padding: 0 } }} style={{ overflow: 'hidden' }}>
+                        <div className="factor-panel-task" style={{ maxHeight: '140px', overflowY: 'auto', padding: '8px 16px', fontSize: '14px', lineHeight: 1.5715, color: 'rgba(0, 0, 0, 0.88)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {userTask}
+                        </div>
+                    </Card>
+                )}
+                <div style={{ marginTop: SIDEBAR_SECTION_GAP }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <div style={SIDEBAR_TITLE_STYLE}>Template</div>
+                            <SidebarToggle open={templateOpen} onClick={() => setTemplateOpen(open => !open)} what="templates and options" />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <HoverIconButton
+                                icon={<SaveOutlined />}
+                                label="Update"
+                                onClick={handleUpdateTemplate}
+                                disabled={!selectedTemplate}
+                                title={selectedTemplate ? `Save the current options into "${selectedTemplate}"` : 'Select a template first'}
+                            />
+                            <HoverIconButton icon={<PlusOutlined />} label="Add" onClick={openAddTemplate} title="Save the current options as a new template" />
+                            <HoverIconButton
+                                icon={<UndoOutlined />}
+                                label="Reset"
+                                onClick={handleResetTemplate}
+                                title={selectedTemplate ? `Restore the options of "${selectedTemplate}"` : 'Clear all options'}
+                            />
+                        </div>
+                    </div>
+                    {templateOpen && (
+                        <div>
+                            {/* The template select looks like the white cards of Request and Information to fill */}
+                            <div className="template-select-card">{templateSelectControl}</div>
+                            <style>{`
+                                .factor-grid-cards .ant-card-head-title { font-size: 14px; }
+                                .factor-grid-cards .ant-row { width: calc(100% + 16px) !important; }
+                                .template-select-card .ant-select { height: 40px !important; }
+                                .template-select-card .ant-select .ant-select-selector { height: 40px !important; padding: 0 16px !important; align-items: center;
+                                    background: #fff !important; border: 0 !important; border-radius: 8px !important;
+                                    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02) !important; }
+                                .template-select-card .ant-select .ant-select-selection-item,
+                                .template-select-card .ant-select .ant-select-selection-placeholder { line-height: 40px !important; padding-inline-end: 24px; }
+                                .template-select-card .ant-select .ant-select-selection-placeholder { color: rgba(0, 0, 0, 0.45) !important; }
+                                .template-select-card .ant-select .ant-select-selection-item { color: rgba(0, 0, 0, 0.88) !important; }
+                                .template-select-card .ant-select .ant-select-arrow { inset-inline-end: 16px; color: rgba(0, 0, 0, 0.45); }
+                            `}</style>
+                            <div className="factor-grid-cards" style={{ marginTop: '12px' }}>{factorGrid}</div>
+                        </div>
+                    )}
+                </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', padding: '12px 16px', flexWrap: 'wrap', borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
-                {templateButtons}
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 16px', borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
                 {generateButton}
             </div>
             {templateModal}

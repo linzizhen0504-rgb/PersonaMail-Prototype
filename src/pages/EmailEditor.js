@@ -2,24 +2,22 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
 import { withHistory, HistoryEditor } from 'slate-history';
-import { Card, Typography, message, Button, Row, Col, Tooltip, Tag, Radio, Checkbox, Flex, Modal, Input, Spin, Tour } from 'antd';
+import { Card, message, Button, Row, Col, Tag, Modal, Input, Spin, Tour } from 'antd';
 import axios from 'axios';
 import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
-import stylebookSVG from '../stylebook.svg';
 import FactorPanel, { useFactorSelection } from './FactorPanel';
 import SelectionRewriteBox, { CARD_BORDER_RADIUS } from './SelectionRewriteBox';
 import PlaceholderTable from './PlaceholderTable';
 import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholderFields, containsPlaceholder, removePlaceholder } from './placeholders';
 import { RobotIcon, UserAvatarIcon, BotAvatarIcon } from '../icons';
 
-const { Title } = Typography;
 
-// Ask AI box is hidden in both experiment conditions; the handlers and backend endpoint stay in place
+// The Ask AI box is hidden; the handlers and backend endpoint stay in place
 const SHOW_ASK_AI = false;
 
-// Experiment condition (?cond=baseline|cards&pid=P01). URL values override and refresh the sessionStorage
-// cache, which keeps them when the app navigates and drops the query string.
+// The participant (?pid=P01). The URL value overrides and refreshes the sessionStorage cache, which keeps it when the app navigates
+// and drops the query string. Every event is logged with cond "cards" (the only condition left) so the log format stays the same.
 const EXPERIMENT_STORAGE_KEY = 'personamail_experiment';
 const getExperimentParams = () => {
     let cached = {};
@@ -34,19 +32,17 @@ const getExperimentParams = () => {
     } catch (error) {
         console.warn('Could not read URL params:', error);
     }
-    const isCond = (c) => c === 'cards' || c === 'baseline';
-    const cond = isCond(params.get('cond')) ? params.get('cond') : (isCond(cached.cond) ? cached.cond : 'baseline');
     const pid = params.get('pid') || cached.pid || 'unknown';
     try {
-        sessionStorage.setItem(EXPERIMENT_STORAGE_KEY, JSON.stringify({ cond, pid }));
+        sessionStorage.setItem(EXPERIMENT_STORAGE_KEY, JSON.stringify({ pid }));
     } catch (error) {
         console.warn('Could not cache experiment params:', error);
     }
-    return { cond, pid };
+    return { pid };
 };
 const EXPERIMENT = getExperimentParams();
 
-// Preference model service (cards condition only); every request gets a short timeout
+// Preference model service; every request gets a short timeout
 const MODEL_SERVICE_URL = 'http://localhost:3003';
 const MODEL_TIMEOUT_MS = 2000;
 const callModel = (path, payload) => axios.post(`${MODEL_SERVICE_URL}${path}`, payload, { timeout: MODEL_TIMEOUT_MS });
@@ -61,7 +57,7 @@ const logEvent = (fields) => {
     const record = {
         timestamp: new Date().toISOString(),
         pid: EXPERIMENT.pid,
-        cond: EXPERIMENT.cond,
+        cond: 'cards',
         context: logContext,
         unit_id: null,
         unit_title: null,
@@ -368,10 +364,10 @@ const OverlayScrollbar = ({ scrollerRef }) => {
 };
 
 const EmailEditor = () => {
-    // cards: manual edits can be undone (Ctrl/Cmd+Z) and redone; baseline keeps the plain editor
-    const editor = useMemo(() => (EXPERIMENT.cond === 'cards' ? withHistory(withReact(createEditor())) : withReact(createEditor())), []);
+    // manual edits can be undone (Ctrl/Cmd+Z) and redone
+    const editor = useMemo(() => (withHistory(withReact(createEditor()))), []);
     const { globalState } = useGlobalContext();
-    const { username: globalUsername, taskId: globalTaskId, userTask: globalUserTask } = globalState;
+    const { username: globalUsername, taskId: globalTaskId } = globalState;
 
     // 任务输入与编辑器是同一个页面：还没有任务内容时显示输入框，提交后显示编辑器
     const [taskInput, setTaskInput] = useState('');
@@ -421,7 +417,6 @@ const EmailEditor = () => {
 
     // Use global state
     const taskId = globalTaskId;
-    const userName = globalUsername;
     // const userTask = globalUserTask;
     
     // Initial editor value
@@ -441,10 +436,8 @@ const EmailEditor = () => {
     useEffect(() => {
         // cards: the text a table filled in was marked; a remount that rebuilds paragraphs from text drops the marks, so they are put
         // back on the same text (not after a new draft, which starts without any)
-        if (EXPERIMENT.cond === 'cards') {
-            if (skipCarryRef.current) skipCarryRef.current = false;
-            else carryMarksRef.current(lastValueRef.current);
-        }
+        if (skipCarryRef.current) skipCarryRef.current = false;
+        else carryMarksRef.current(lastValueRef.current);
         if (editor.history) editor.history = { undos: [], redos: [] };
         // cards: a click that selected a unit remounted the editor: the caret goes back to the character that was clicked
         const pending = pendingCaretRef.current;
@@ -472,8 +465,6 @@ const EmailEditor = () => {
     }, [editor, editorKey]);
     const [components, setComponents] = useState([]);
     const [selectedComponentId, setSelectedComponentId] = useState(null);
-    const [highlightedRanges, setHighlightedRanges] = useState([]);
-    const [floatingToolbar, setFloatingToolbar] = useState({ visible: false, component: null, position: null });
     const editorRef = useRef(null);
     // cards: "Describe changes" box under a text selection inside one unit (null when closed)
     const [rewriteBox, setRewriteBox] = useState(null);
@@ -520,7 +511,6 @@ const EmailEditor = () => {
     }, [placeholders]);
     // Text that was filled in from the table and then changed in the email: the input follows the email
     useEffect(() => {
-        if (EXPERIMENT.cond !== 'cards') return;
         const filled = new Map();
         const walk = (list) => (list || []).forEach(node => {
             if (node && typeof node.text === 'string') {
@@ -544,38 +534,27 @@ const EmailEditor = () => {
     const [originalText, setOriginalText] = useState('');
     // Add this state near other useState declarations
     const [combinedResults, setCombinedResults] = useState([]);
-    const [previewContent, setPreviewContent] = useState('');
     const valueRef = useRef(value);
     valueRef.current = value;
     // Latest data for the async reject flow (state captured by a click handler goes stale while it waits)
     const combinedResultsRef = useRef([]);
     const componentsRef = useRef([]);
     const originalTextRef = useRef('');
-    // Version Cards (cond=cards) and experiment logging state
+    // Version Cards and experiment logging state
     const [cardsState, setCardsState] = useState(null);
     const cardsRef = useRef(null);
     const [notice, setNotice] = useState(null);
     const versionCardsRef = useRef(null);
     const cardsRequestIdRef = useRef(0);
-    const previewSessionRef = useRef(null);
     const editWatchRef = useRef(null);
     combinedResultsRef.current = combinedResults;
     componentsRef.current = components;
     originalTextRef.current = originalText;
     
-    // Modal states for component change tracking
-    const [changeModal, setChangeModal] = useState({
-        visible: false,
-        oldContent: '',
-        newContent: '',
-        componentId: null
-    });
-    const [modificationReason, setModificationReason] = useState('');
-    const [lastModifiedComponent, setLastModifiedComponent] = useState(null);
     // The editor stays blank until a draft has been generated from the factor panel
     const [hasDraft, setHasDraft] = useState(false);
     const [draftGenerating, setDraftGenerating] = useState(false);
-    // First-use guide (cards condition): after the first draft, point the user to the Regenerate button of the components.
+    // First-use guide: after the first draft, point the user to the Regenerate button of the components.
     // Shown once per username; the flag lives in localStorage (without storage it shows once per page load).
     const generateButtonRef = useRef(null);
     const guideKey = `personamail_guide_components_seen:${globalUsername || ''}`;
@@ -600,7 +579,7 @@ const EmailEditor = () => {
     const draftVersionRef = useRef(0);
     const styleSessionId = () => `${globalTaskId}:${draftVersionRef.current}`;
     const startNewStyleSession = () => {
-        if (EXPERIMENT.cond !== 'cards' || !globalTaskId) return;
+        if (!globalTaskId) return;
         const previous = styleSessionId();
         draftVersionRef.current += 1;
         callModel('/reset-session', { pid: EXPERIMENT.pid, session_id: previous }).catch((resetError) => {
@@ -614,7 +593,6 @@ const EmailEditor = () => {
     // The values typed in the table are given to the writer with the request, so the new draft uses them where it needs them (a new
     // draft often words its placeholders differently, so they cannot all be matched afterwards)
     const buildFillNote = () => {
-        if (EXPERIMENT.cond !== 'cards') return '';
         const typed = placeholders
             .filter(field => (placeholderValues[field.key] || '').trim())
             .map(field => `${field.label} = ${placeholderValues[field.key].trim()}`);
@@ -627,21 +605,19 @@ const EmailEditor = () => {
             .filter(([, typed]) => (typed || '').trim())
             .map(([key, typed]) => [key, typed.trim()]));
         const known = knownPlaceholderKeys(draft);
-        if (EXPERIMENT.cond === 'cards' && fills.size > 0) {
+        if (fills.size > 0) {
             text = fillPlaceholders(draft, fills, known);
         }
-        if (EXPERIMENT.cond === 'cards') {
-            placeholderKnownRef.current = new Set(known); // a new draft: nothing carries over from the old one
-            skipCarryRef.current = true;
-        }
+        placeholderKnownRef.current = new Set(known); // a new draft: nothing carries over from the old one
+        skipCarryRef.current = true;
         startNewStyleSession();
-        applyDraftText(text, EXPERIMENT.cond === 'cards' && fills.size > 0 ? { template: draft, fills, known } : null);
+        applyDraftText(text, fills.size > 0 ? { template: draft, fills, known } : null);
         if (text !== draft) {
             // The server saved the draft with the brackets; the draft file follows the editor
             await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: text })
                 .catch(error => console.error('Error saving draft to sessionData:', error));
         }
-        if (EXPERIMENT.cond === 'cards' && fills.size > 0) {
+        if (fills.size > 0) {
             // Typed values that are in the new draft, whether the writer put them in or they were filled in afterwards
             const applied = placeholders.filter(field => fills.has(field.key) && text.includes(fills.get(field.key)));
             const missed = placeholders.filter(field => fills.has(field.key) && !text.includes(fills.get(field.key)));
@@ -650,7 +626,7 @@ const EmailEditor = () => {
             if (missed.length > 0) message.warning(`${missed.map(field => field.label).join(', ')} did not fit the new draft and was not used.`);
         }
         // cards: the components and their intents are made together with the draft; the page shows nothing until both are ready
-        if (EXPERIMENT.cond === 'cards') await handleExtractComponents({ freshDraft: true });
+        await handleExtractComponents({ freshDraft: true });
     };
     const factorSelection = useFactorSelection({
         userTask,
@@ -678,7 +654,6 @@ const EmailEditor = () => {
     const [aiPrompt, setAiPrompt] = useState('');
     const [aiLoading, setAiLoading] = useState(false);
     const [aiPreview, setAiPreview] = useState({ visible: false, content: '' });
-    const [modalSaveLoading, setModalSaveLoading] = useState(false);
     
     // Utility function to safely reset editor state
     const safeResetEditor = () => {
@@ -758,7 +733,6 @@ const EmailEditor = () => {
         setComponents([]);
         setCombinedResults([]);
         setSelectedComponentId(null);
-        setFloatingToolbar({ visible: false, component: null, position: null });
         closeRewriteBoxRef.current();
         setPlaceholderValues({});
         setHasDraft(Boolean(newContent.trim()));
@@ -1137,7 +1111,7 @@ const EmailEditor = () => {
                             return { text: '' };
                         }
                         // 移除所有标记，只保留文本和基本格式
-                        const { highlight, componentId, hasDimensions, linkedIntents, ...cleanChild } = child;
+                        const { highlight, componentId, ...cleanChild } = child;
                         return cleanChild;
                     }) : [{ text: '' }]
                 };
@@ -1155,7 +1129,7 @@ const EmailEditor = () => {
             setLoading(true);
             // 清除之前的所有dimension和highlight标记
             if (!freshDraft) clearAllMarkers();
-            if (EXPERIMENT.cond === 'cards' && !freshDraft) {
+            if (!freshDraft) {
                 // The components are cut from the draft file: it has to hold what is in the editor now (typed edits are not saved on their own),
                 // or the units would not be found in the editor and nothing would be highlighted
                 const current = valueRef.current.map(node => getNodeText(null, node)).filter(text => text.trim()).join('\n\n');
@@ -1184,12 +1158,7 @@ const EmailEditor = () => {
             }
 
             // cards: the components and their intents are shown together, once both are ready (see handleCombinedResult)
-            if (EXPERIMENT.cond !== 'cards') {
-                setComponents(extractedComponents);
-                message.success(`Extracted ${extractedComponents.length} components`);
-            } else {
-                setComponents([]);
-            }
+            setComponents([]);
             setSelectedComponentId(null); // 清除选中状态
             setCombinedResults([]); // 清除之前的combined results
 
@@ -1217,16 +1186,10 @@ const EmailEditor = () => {
                     ? JSON.parse(linkResponse.data.links) 
                     : linkResponse.data.links;
                 console.log('Component-Intent Link Results:', linkResults);
-                if (EXPERIMENT.cond === 'cards') {
-                    if (!(await handleCombinedResult())) throw new Error('Could not combine the components and the intents');
-                } else {
-                    handleCombinedResult();
-                }
+                if (!(await handleCombinedResult())) throw new Error('Could not combine the components and the intents');
             } catch (intentError) {
                 console.error('Error calling intent-analyzer-new or component-intent-link:', intentError);
-                message.error(EXPERIMENT.cond === 'cards'
-                    ? 'Failed to generate intents. Please click Regenerate.'
-                    : 'Failed to generate intents. Please click "Generate Components" again.');
+                message.error('Failed to generate intents. Please click Regenerate.');
             }
         } catch (error) {
             console.error('Failed to extract components:', error);
@@ -1343,11 +1306,7 @@ const EmailEditor = () => {
             console.warn('Could not clear editor selection:', error);
         }
 
-        // 获取该component的linkedIntents
-        const combinedResult = combinedResults.find(result => result.id === componentId);
-        const linkedIntents = combinedResult?.linkedIntents || [];
-        
-        // 清除所有highlight属性，保留dimension相关属性
+        // 清除所有highlight属性
         const cleanValue = editorValue.map(node => {
             if (!node || typeof node !== 'object') {
                 return { type: 'paragraph', children: [{ text: '' }] };
@@ -1381,7 +1340,7 @@ const EmailEditor = () => {
             return cleanValue.map((node, i) => {
                 if (i !== found) return node;
                 const text = getNodeText(null, node);
-                const meta = { hasDimensions: linkedIntents.length > 0, linkedIntents, componentId };
+                const meta = { componentId };
                 const children = [];
                 if (text.slice(0, span.start)) children.push({ text: text.slice(0, span.start), ...meta });
                 children.push({ text: text.slice(span.start, span.end), highlight: true, ...meta });
@@ -1438,8 +1397,6 @@ const EmailEditor = () => {
         
         console.log('Mapped positions - original:', originalStart, 'to', originalEnd);
         
-        // 找到受影响的节点
-        let currentPos = 0;
         const affectedNodes = [];
         
         nodeMap.forEach(nodeInfo => {
@@ -1492,13 +1449,7 @@ const EmailEditor = () => {
                 const existingChild = node.children.find(child => 
                     child.text && child.text.includes(text)
                 );
-                return existingChild ? {
-                    hasDimensions: existingChild.hasDimensions,
-                    linkedIntents: existingChild.linkedIntents,
-                    componentId: existingChild.componentId,
-                    isFirstTextNode: existingChild.isFirstTextNode
-
-                } : {};
+                return existingChild ? { componentId: existingChild.componentId } : {};
             };
             
             if (beforeText) {
@@ -1509,17 +1460,10 @@ const EmailEditor = () => {
             }
             
             if (highlightText) {
-                // 判断是否为第一个文本节点（用于显示dimension圆圈）
-                const isFirstTextNode = (affectedNode === affectedNodes[0]) && (validStart === 0) && (newChildren.length === 0);
-                
                 newChildren.push({ 
                     text: highlightText, 
                     highlight: true, 
-                    componentId: componentId,
-                    hasDimensions: linkedIntents.length > 0,
-                    linkedIntents: linkedIntents,
-                    isFirstTextNode: isFirstTextNode
-                   
+                    componentId: componentId
                 });
             }
             
@@ -1608,11 +1552,6 @@ const EmailEditor = () => {
                 return;
             }
             
-            // 如果toolbar还显示，则关闭它
-            if (floatingToolbar.visible) {
-                closeFloatingToolbar();
-            }
-            
             if (selectedComponentId === component.id) {
                 // 如果点击的是已选中的组件，则取消选择
                 console.log('Deselecting component');
@@ -1621,15 +1560,6 @@ const EmailEditor = () => {
             }
             
             // Check if there was a previous modification and show modal (cards: no modification record is asked for)
-            if (EXPERIMENT.cond !== 'cards' && lastModifiedComponent && lastModifiedComponent.componentId !== component.id) {
-                setChangeModal({
-                    visible: true,
-                    oldContent: lastModifiedComponent.oldContent,
-                    newContent: lastModifiedComponent.newContent,
-                    componentId: lastModifiedComponent.componentId
-                });
-                return;
-            }
             
             // 设置新的选中状态
             console.log('Setting selected component ID:', component.id);
@@ -1678,1413 +1608,8 @@ const EmailEditor = () => {
         }
     };
 
-    // Handle clicking on highlighted text
-    const handleHighlightClick = (event, componentId) => {
-        try {
-            console.log('Highlight clicked for componentId:', componentId);
-            if (!componentId) {
-                console.warn('No componentId provided');
-                return;
-            }
-            const component = components.find(c => c.id === componentId);
-            if (!component) {
-                console.warn('Component not found for id:', componentId);
-                return;
-            }
 
-            // Calculate toolbar position
-            const rect = event.target.getBoundingClientRect();
-            const editorRect = editorRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
-            // Clear editor selection before showing toolbar to prevent path conflicts
-            safeEditorOperation(() => {
-                if (editor.selection) {
-                    Transforms.deselect(editor);
-                }
-            });
 
-            setFloatingToolbar({
-                visible: true,
-                component: component,
-                position: {
-                    top: rect.top - editorRect.top,
-                    left: rect.left - editorRect.left,
-                },
-            });
-        } catch (error) {
-            console.error('Error handling highlight click:', error);
-        }
-    };
-    
-    // Close floating toolbar safely
-    const closeFloatingToolbar = () => {
-        try {
-            setFloatingToolbar({ visible: false, component: null, position: null });
-            // Clear editor selection to prevent path conflicts
-            safeEditorOperation(() => {
-                if (editor.selection) {
-                    Transforms.deselect(editor);
-                }
-            });
-        } catch (error) {
-            console.error('Error closing floating toolbar:', error);
-        }
-    };
-
-    // Handle component replacement
-    const handleComponentReplace = async (componentId, newContent) => {
-        try {
-            // Update components state
-            const updatedComponents = components.map(comp => 
-                comp.id === componentId ? { ...comp, content: newContent } : comp
-            );
-            setComponents(updatedComponents);
-
-            // Update combinedResults
-            setCombinedResults(prev => prev.map(result => 
-                result.id === componentId 
-                    ? { ...result, content: newContent }
-                    : result
-            ));
-            
-            // Components state is already updated above, no need to update commonComponents
-
-            // Update the original text content
-            let updatedText = originalText;
-            const component = components.find(c => c.id === componentId);
-            if (component) {
-                updatedText = updatedText.replace(component.content, newContent);
-                setOriginalText(updatedText);
-                
-                // Save to draft file
-                await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                    content: updatedText
-                });
-            }
-
-            // Re-parse and update editor content
-            const slateContent = updatedText
-                .split('\n\n')
-                .filter(paragraph => paragraph.trim())
-                .map((paragraph) => ({
-                    type: 'paragraph',
-                    children: [{ text: paragraph.trim() }],
-                }));
-
-            setValue(slateContent);
-            
-            // Re-apply highlighting with new content and update range
-            setTimeout(() => {
-                // Clear existing highlighting first
-                const cleanValue = slateContent.map(node => ({
-                    ...node,
-                    children: node.children.map(child => {
-                        if (typeof child === 'string') {
-                            return child;
-                        }
-                        const { highlight, componentId: childCompId, ...cleanChild } = child;
-                        return cleanChild;
-                    })
-                }));
-                setValue(cleanValue);
-                
-                // Apply new highlighting with updated content
-                setTimeout(() => {
-                    applyHighlighting(newContent, componentId);
-                }, 50);
-            }, 100);
-            
-            message.success('Component updated successfully');
-        } catch (error) {
-            console.error('Failed to update component:', error);
-            message.error('Failed to save changes');
-        }
-    };
-    // Component that appears when text is selected/highlighted
-const FloatingToolbar = ({ component, onReplace, onClose, position, value, setValue, setEditorKey, combinedResults, setCombinedResults, setComponents, originalText, setOriginalText, components, globalTaskId, getNodeText, setLastModifiedComponent, safeEditorOperation }) => {
-    const [isEditing, setIsEditing] = useState(false);
-    const [isRewriting, setIsRewriting] = useState(false);
-    const [isQuickfixing, setIsQuickfixing] = useState(false);
-    const [isQuickfixLoading, setIsQuickfixLoading] = useState(false);
-    const [isExpanding, setIsExpanding] = useState(false);
-    const [isExpandLoading, setIsExpandLoading] = useState(false);
-    const [isShortening, setIsShortening] = useState(false);
-    const [isShortenLoading, setIsShortenLoading] = useState(false);
-    const [detailsModal, setDetailsModal] = useState({ visible: false, recommendation: null });
-    const [quickfixRecommendations, setQuickfixRecommendations] = useState([]);
-    const [selectedRecommendation, setSelectedRecommendation] = useState(null);
-    const [editText, setEditText] = useState(component?.content || '');
-    const [rewritePrompt, setRewritePrompt] = useState('');
-    const [newContent, setNewContent] = useState('');
-    const [expandedContent, setExpandedContent] = useState('');
-    const [shortenedContent, setShortenedContent] = useState('');
-    const [isRewriteLoading, setIsRewriteLoading] = useState(false);
-    const [isManualEditing, setIsManualEditing] = useState(false);
-    const [manualEditContent, setManualEditContent] = useState('');
-    
-    // States for modification record modal
-    const [isModificationRecord, setIsModificationRecord] = useState(false);
-    const [originalTextInput, setOriginalTextInput] = useState('');
-    const [revisedTextInput, setRevisedTextInput] = useState('');
-    const [modificationReasonInput, setModificationReasonInput] = useState('');
-    const [modificationRecordLoading, setModificationRecordLoading] = useState(false);
-
-    if (!component || !position) return null;
-
-    const handleEdit = () => {
-        setIsEditing(true);
-    };
-
-    const handleQuickfix = async () => {
-        setIsQuickfixLoading(true);
-        try {
-            // Debug logging
-            console.log('Debug - combinedResults:', combinedResults);
-            console.log('Debug - components:', components);
-            
-            // Use combinedResults first, then fall back to components state
-            const componentList = combinedResults.length > 0 ? combinedResults : components;
-            console.log('Sending componentList to stylebook-recommend:', componentList);
-            
-            if (componentList.length === 0) {
-                message.warning('No components available. Please generate components first.');
-                return;
-            }
-            
-            const response = await axios.post('http://localhost:3001/stylebook-recommend', {
-                userTask: userTask,
-                userName: globalUsername,
-                taskId: globalTaskId,
-                selectedContent: component.content
-            });
-            
-            const recommendations = response.data.recommendations || [];
-            
-            if (recommendations.length === 0) {
-                message.info('No stylebook recommendations available');
-                return;
-            }
-            
-            // Switch to quickfix mode
-            setIsQuickfixing(true);
-            setQuickfixRecommendations(recommendations);
-        } catch (error) {
-            console.error('Failed to get stylebook recommendations:', error);
-            message.error('Failed to get recommendations');
-        } finally {
-            setIsQuickfixLoading(false);
-        }
-    };
-
-    const handleAIRewrite = () => {
-        setIsRewriting(true);
-        setRewritePrompt('');
-        setNewContent('');
-    };
-
-    const handleExpand = async () => {
-        setIsExpandLoading(true);
-        try {
-            const response = await axios.post('http://localhost:3001/content-expand', {
-                userName: globalUsername,
-                taskId: globalTaskId,
-                selectedContent: component.content
-            });
-            
-            setExpandedContent(response.data.expandedContent);
-            setIsExpanding(true);
-        } catch (error) {
-            console.error('Failed to expand content:', error);
-            message.error('Failed to expand content');
-        } finally {
-            setIsExpandLoading(false);
-        }
-    };
-
-    const handleShorten = async () => {
-        setIsShortenLoading(true);
-        try {
-            const response = await axios.post('http://localhost:3001/content-shorten', {
-                userName: globalUsername,
-                taskId: globalTaskId,
-                selectedContent: component.content
-            });
-            
-            setShortenedContent(response.data.shortenedContent);
-            setIsShortening(true);
-        } catch (error) {
-            console.error('Failed to shorten content:', error);
-            message.error('Failed to shorten content');
-        } finally {
-            setIsShortenLoading(false);
-        }
-    };
-
-    const handleManualEdit = () => {
-        setManualEditContent(component.content);
-        setIsManualEditing(true);
-    };
-
-    const handleModificationRecord = () => {
-        setOriginalTextInput(component.content || '');
-        setRevisedTextInput('');
-        setModificationReasonInput('');
-        setIsModificationRecord(true);
-    };
-
-    const handleSaveModificationRecord = async () => {
-        if (!originalTextInput.trim() || !revisedTextInput.trim() || !modificationReasonInput.trim()) {
-            message.warning('Please fill in all fields');
-            return;
-        }
-
-        setModificationRecordLoading(true);
-        try {
-            // Prepare component data for the API call
-            const componentBeforeEdit = {
-                id: component.id,
-                title: component.title,
-                content: originalTextInput
-            };
-
-            const componentAfterEdit = {
-                id: component.id,
-                title: component.title,
-                content: revisedTextInput
-            };
-
-            // Call the same API as handleModalSave
-            const response = await axios.post('http://localhost:3001/save-manual-edit-tool', {
-                userTask: userTask,
-                userName: globalUsername,
-                taskId: globalTaskId,
-                userEditReason: modificationReasonInput,
-                componentBeforeEdit: componentBeforeEdit,
-                componentAfterEdit: componentAfterEdit
-            });
-
-            console.log('Manual modification record saved:', response.data);
-            
-            // Reset modal state
-            setIsModificationRecord(false);
-            setOriginalTextInput('');
-            setRevisedTextInput('');
-            setModificationReasonInput('');
-            
-            message.success('Modification record saved successfully');
-        } catch (error) {
-            console.error('Error saving modification record:', error);
-            message.error('Failed to save modification record');
-        } finally {
-            setModificationRecordLoading(false);
-        }
-    };
-
-    const handleCancelModificationRecord = () => {
-        setIsModificationRecord(false);
-        setOriginalTextInput('');
-        setRevisedTextInput('');
-        setModificationReasonInput('');
-    };
-
-    const handleGenerateRewrite = async () => {
-        if (!rewritePrompt.trim()) {
-            message.warning('Please enter a rewrite prompt');
-            return;
-        }
-        
-        setIsRewriteLoading(true);
-        try {
-            const response = await axios.post('http://localhost:3001/ai-generate-rewrite', {
-                userTask: userTask,
-                userName: globalUsername,
-                taskId: globalTaskId,
-                selectedContent: component.content,
-                userPrompt: rewritePrompt
-            });
-            
-            setNewContent(response.data.rewrittenContent);
-        } catch (error) {
-            console.error('Failed to rewrite content:', error);
-            message.error('Failed to rewrite content');
-        } finally {
-            setIsRewriteLoading(false);
-        }
-    };
-
-    const handleApplyManualEdit = async () => {
-        if (manualEditContent && manualEditContent !== component.content) {
-            try {
-                // Get linkedIntents for this component
-                const combinedResult = combinedResults?.find(result => result.id === component.id);
-                const linkedIntents = combinedResult?.linkedIntents || [];
-                
-                // Update the editor value directly (same as other apply functions)
-                const newValue = value.map(node => {
-                    const nodeText = getNodeText(null, node);
-                    if (nodeText.includes(component.content)) {
-                        const updatedText = nodeText.replace(component.content, manualEditContent);
-                        return {
-                            ...node,
-                            children: [{
-                                text: updatedText,
-                                highlight: true,
-                                componentId: component.id,
-                                hasDimensions: linkedIntents.length > 0,
-                                linkedIntents: linkedIntents
-                            }]
-                        };
-                    }
-                    return node;
-                });
-                
-                setValue(newValue);
-                setEditorKey(prev => prev + 1);
-
-                // Update component states
-                setComponents(prevComponents => 
-                    prevComponents.map(comp => 
-                        comp.id === component.id ? { ...comp, content: manualEditContent } : comp
-                    )
-                );
-
-                // Update combinedResults
-                setCombinedResults(prevResults => 
-                    prevResults.map(comp => 
-                        comp.id === component.id 
-                            ? { ...comp, content: manualEditContent }
-                            : comp
-                    )
-                );
-
-                // Update originalText and save to draft
-                const updatedText = originalText.replace(component.content, manualEditContent);
-                setOriginalText(updatedText);
-                
-                await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                    content: updatedText
-                });
-                
-                // Track this modification for potential modal display
-                if (typeof setLastModifiedComponent === 'function') {
-                    setLastModifiedComponent({
-                        componentId: component.id,
-                        oldContent: component.content,
-                        newContent: manualEditContent
-                    });
-                }
-                
-                setIsManualEditing(false);
-                onClose();
-                
-                message.success('Content applied and saved successfully');
-            } catch (error) {
-                console.error('Failed to apply manual edit:', error);
-                message.error('Failed to save changes');
-            }
-        }
-    };
-
-    const handleCancelManualEdit = () => {
-        setIsManualEditing(false);
-        setManualEditContent('');
-    };
-
-    const handleApplyRewrite = async () => {
-        if (newContent) {
-            try {
-                // Get linkedIntents for this component
-                const combinedResult = combinedResults?.find(result => result.id === component.id);
-                const linkedIntents = combinedResult?.linkedIntents || [];
-                
-                // Update the editor value directly (same as handleApplyToSelectedComponent)
-                const newValue = value.map(node => {
-                    const nodeText = getNodeText(null, node);
-                    if (nodeText.includes(component.content)) {
-                        const updatedText = nodeText.replace(component.content, newContent);
-                        return {
-                            ...node,
-                            children: [{
-                                text: updatedText,
-                                highlight: true,
-                                componentId: component.id,
-                                hasDimensions: linkedIntents.length > 0,
-                                linkedIntents: linkedIntents
-                            }]
-                        };
-                    }
-                    return node;
-                });
-                
-                setValue(newValue);
-                setEditorKey(prev => prev + 1);
-
-                // Update component states
-                setComponents(prevComponents => 
-                    prevComponents.map(comp => 
-                        comp.id === component.id ? { ...comp, content: newContent } : comp
-                    )
-                );
-
-                // Update combinedResults
-                setCombinedResults(prevResults => 
-                    prevResults.map(comp => 
-                        comp.id === component.id 
-                            ? { ...comp, content: newContent }
-                            : comp
-                    )
-                );
-                
-                // Update components array (no need to update commonComponents as it's not used)
-                // The components state is already updated above
-
-                // Update originalText and save to draft
-                const updatedText = originalText.replace(component.content, newContent);
-                setOriginalText(updatedText);
-                
-                await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                    content: updatedText
-                });
-                
-                // Track this modification for potential modal display
-                if (typeof setLastModifiedComponent === 'function') {
-                    setLastModifiedComponent({
-                        componentId: component.id,
-                        oldContent: component.content,
-                        newContent: newContent
-                    });
-                }
-                
-                setIsRewriting(false);
-                onClose();
-                
-                message.success('Content applied and saved successfully');
-            } catch (error) {
-                console.error('Failed to apply rewrite:', error);
-                message.error('Failed to save changes');
-            }
-        }
-    };
-
-    const handleSave = () => {
-        onReplace(component.id, editText);
-        setIsEditing(false);
-        onClose();
-    };
-
-    const handleCancel = () => {
-        setEditText(component.content);
-        setIsEditing(false);
-    };
-
-    const handleCancelRewrite = () => {
-        setIsRewriting(false);
-        setRewritePrompt('');
-        setNewContent('');
-    };
-
-    const handleApplyExpand = async () => {
-        if (expandedContent) {
-            try {
-                // Get linkedIntents for this component
-                const combinedResult = combinedResults?.find(result => result.id === component.id);
-                const linkedIntents = combinedResult?.linkedIntents || [];
-                
-                // Update the editor value directly (same as handleApplyRewrite)
-                const newValue = value.map(node => {
-                    const nodeText = getNodeText(null, node);
-                    if (nodeText.includes(component.content)) {
-                        const updatedText = nodeText.replace(component.content, expandedContent);
-                        return {
-                            ...node,
-                            children: [{
-                                text: updatedText,
-                                highlight: true,
-                                componentId: component.id,
-                                hasDimensions: linkedIntents.length > 0,
-                                linkedIntents: linkedIntents
-                            }]
-                        };
-                    }
-                    return node;
-                });
-                
-                setValue(newValue);
-                setEditorKey(prev => prev + 1);
-
-                // Update component states
-                setComponents(prevComponents => 
-                    prevComponents.map(comp => 
-                        comp.id === component.id ? { ...comp, content: expandedContent } : comp
-                    )
-                );
-
-                // Update combinedResults
-                setCombinedResults(prevResults => 
-                    prevResults.map(comp => 
-                        comp.id === component.id 
-                            ? { ...comp, content: expandedContent }
-                            : comp
-                    )
-                );
-
-                // Update originalText and save to draft
-                const updatedText = originalText.replace(component.content, expandedContent);
-                setOriginalText(updatedText);
-                
-                await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                    content: updatedText
-                });
-                
-                // Track this modification for potential modal display
-                if (typeof setLastModifiedComponent === 'function') {
-                    setLastModifiedComponent({
-                        componentId: component.id,
-                        oldContent: component.content,
-                        newContent: expandedContent
-                    });
-                }
-                
-                setIsExpanding(false);
-                onClose();
-                
-                message.success('Content expanded and saved successfully');
-            } catch (error) {
-                console.error('Failed to apply expand:', error);
-                message.error('Failed to save changes');
-            }
-        }
-    };
-
-    const handleCancelExpand = () => {
-        setIsExpanding(false);
-        setExpandedContent('');
-    };
-
-    const handleApplyShorten = async () => {
-        if (shortenedContent) {
-            try {
-                // Get linkedIntents for this component
-                const combinedResult = combinedResults?.find(result => result.id === component.id);
-                const linkedIntents = combinedResult?.linkedIntents || [];
-                
-                // Update the editor value directly (same as handleApplyExpand)
-                const newValue = value.map(node => {
-                    const nodeText = getNodeText(null, node);
-                    if (nodeText.includes(component.content)) {
-                        const updatedText = nodeText.replace(component.content, shortenedContent);
-                        return {
-                            ...node,
-                            children: [{
-                                text: updatedText,
-                                highlight: true,
-                                componentId: component.id,
-                                hasDimensions: linkedIntents.length > 0,
-                                linkedIntents: linkedIntents
-                            }]
-                        };
-                    }
-                    return node;
-                });
-                
-                setValue(newValue);
-                setEditorKey(prev => prev + 1);
-
-                // Update component states
-                setComponents(prevComponents => 
-                    prevComponents.map(comp => 
-                        comp.id === component.id ? { ...comp, content: shortenedContent } : comp
-                    )
-                );
-
-                // Update combinedResults
-                setCombinedResults(prevResults => 
-                    prevResults.map(comp => 
-                        comp.id === component.id 
-                            ? { ...comp, content: shortenedContent }
-                            : comp
-                    )
-                );
-
-                // Update originalText and save to draft
-                const updatedText = originalText.replace(component.content, shortenedContent);
-                setOriginalText(updatedText);
-                
-                await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                    content: updatedText
-                });
-                
-                // Track this modification for potential modal display
-                if (typeof setLastModifiedComponent === 'function') {
-                    setLastModifiedComponent({
-                        componentId: component.id,
-                        oldContent: component.content,
-                        newContent: shortenedContent
-                    });
-                }
-                
-                setIsShortening(false);
-                onClose();
-                
-                message.success('Content shortened and saved successfully');
-            } catch (error) {
-                console.error('Failed to apply shorten:', error);
-                message.error('Failed to save changes');
-            }
-        }
-    };
-
-    const handleCancelShorten = () => {
-        setIsShortening(false);
-        setShortenedContent('');
-    };
-
-    const handleApplyQuickfix = async () => {
-        if (selectedRecommendation) {
-            try {
-                // Get linkedIntents for this component
-                const combinedResult = combinedResults?.find(result => result.id === component.id);
-                const linkedIntents = combinedResult?.linkedIntents || [];
-                
-                // Update the editor value directly (same as handleApplyRewrite)
-                const newValue = value.map(node => {
-                    const nodeText = getNodeText(null, node);
-                    if (nodeText.includes(component.content)) {
-                        const updatedText = nodeText.replace(component.content, selectedRecommendation.recommended_revision);
-                        return {
-                            ...node,
-                            children: [{
-                                text: updatedText,
-                                highlight: true,
-                                componentId: component.id,
-                                hasDimensions: linkedIntents.length > 0,
-                                linkedIntents: linkedIntents
-                            }]
-                        };
-                    }
-                    return node;
-                });
-                
-                setValue(newValue);
-                setEditorKey(prev => prev + 1);
-
-                // Update component states
-                setComponents(prevComponents => 
-                    prevComponents.map(comp => 
-                        comp.id === component.id ? { ...comp, content: selectedRecommendation.recommended_revision } : comp
-                    )
-                );
-
-                // Update combinedResults
-                setCombinedResults(prevResults => 
-                    prevResults.map(comp => 
-                        comp.id === component.id 
-                            ? { ...comp, content: selectedRecommendation.recommended_revision }
-                            : comp
-                    )
-                );
-                
-                // Update components array (no need to update commonComponents as it's not used)
-                // The components state is already updated above
-
-                // Update originalText and save to draft
-                const updatedText = originalText.replace(component.content, selectedRecommendation.recommended_revision);
-                setOriginalText(updatedText);
-                
-                await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                    content: updatedText
-                });
-                
-                // Track this modification for potential modal display
-                if (typeof setLastModifiedComponent === 'function') {
-                    setLastModifiedComponent({
-                        componentId: component.id,
-                        oldContent: component.content,
-                        newContent: selectedRecommendation.recommended_revision
-                    });
-                }
-                
-                setIsQuickfixing(false);
-                onClose();
-                
-                message.success('Quickfix applied and saved successfully');
-            } catch (error) {
-                console.error('Failed to apply quickfix:', error);
-                message.error('Failed to save changes');
-            }
-        }
-    };
-
-    const handleCancelQuickfix = () => {
-        setIsQuickfixing(false);
-        setQuickfixRecommendations([]);
-        setSelectedRecommendation(null);
-    };
-
-    // Function button style
-    const buttonStyle = {
-        padding: '6px 12px',
-        border: 'none',
-        background: 'transparent',
-        cursor: 'pointer',
-        borderRadius: '4px',
-        fontSize: '12px',
-        color: '#666',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '4px',
-        transition: 'all 0.2s',
-        minWidth: '60px',
-        justifyContent: 'center'
-    };
-
-    const buttonHoverStyle = {
-        ...buttonStyle,
-        background: '#f5f5f5',
-        color: '#333'
-    };
-
-    return (
-        <div
-            style={{
-                position: 'absolute',
-                top: position.top - 60,
-                left: position.left,
-                background: 'white',
-                border: '1px solid #e0e0e0',
-                borderRadius: '8px',
-                boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-                zIndex: 1000,
-                overflow: 'hidden'
-            }}
-        >
-            {!isEditing && !isRewriting && !isQuickfixing && !isExpanding && !isShortening && !isManualEditing && !isModificationRecord ? (
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                    {/* <button
-                        style={buttonStyle}
-                        onMouseEnter={(e) => Object.assign(e.target.style, buttonHoverStyle)}
-                        onMouseLeave={(e) => Object.assign(e.target.style, buttonStyle)}
-                        onClick={handleEdit}
-                        title="Edit"
-                    >
-                        ✏️ Edit
-                    </button> */}
-                    
-                    <div style={{ width: '1px', height: '24px', background: '#e0e0e0' }} />
-                    
-                    <button
-                        style={buttonStyle}
-                        onMouseEnter={(e) => Object.assign(e.target.style, buttonHoverStyle)}
-                        onMouseLeave={(e) => Object.assign(e.target.style, buttonStyle)}
-                        onClick={handleQuickfix}
-                        title="Quickfix"
-                        disabled={isQuickfixLoading}
-                    >
-                        {isQuickfixLoading ? '⏳ Loading...' : '✨ Quickfix'}
-                    </button>
-                    
-                    <div style={{ width: '1px', height: '24px', background: '#e0e0e0' }} />
-                    
-                    <button
-                        style={buttonStyle}
-                        onMouseEnter={(e) => Object.assign(e.target.style, buttonHoverStyle)}
-                        onMouseLeave={(e) => Object.assign(e.target.style, buttonStyle)}
-                        onClick={handleAIRewrite}
-                        title="AI Rewrite"
-                    >
-                        🔄 AI Rewrite
-                    </button>
-                    
-                    <div style={{ width: '1px', height: '24px', background: '#e0e0e0' }} />
-                    
-                    <button
-                        style={buttonStyle}
-                        onMouseEnter={(e) => Object.assign(e.target.style, buttonHoverStyle)}
-                        onMouseLeave={(e) => Object.assign(e.target.style, buttonStyle)}
-                        onClick={handleManualEdit}
-                        title="Manual Edit"
-                    >
-                        ✏️ Manual Edit
-                    </button>
-                    
-                    <div style={{ width: '1px', height: '24px', background: '#e0e0e0' }} />
-                    
-                    
-                    
-                    <div style={{ width: '1px', height: '24px', background: '#e0e0e0' }} />
-                    
-                    <button
-                        style={buttonStyle}
-                        onMouseEnter={(e) => Object.assign(e.target.style, buttonHoverStyle)}
-                        onMouseLeave={(e) => Object.assign(e.target.style, buttonStyle)}
-                        onClick={handleExpand}
-                        title="Expand"
-                        disabled={isExpandLoading}
-                    >
-                        {isExpandLoading ? '⏳ Loading...' : '📈 Expand'}
-                    </button>
-                    
-                    <div style={{ width: '1px', height: '24px', background: '#e0e0e0' }} />
-                    
-                    <button
-                        style={buttonStyle}
-                        onMouseEnter={(e) => Object.assign(e.target.style, buttonHoverStyle)}
-                        onMouseLeave={(e) => Object.assign(e.target.style, buttonStyle)}
-                        onClick={handleShorten}
-                        title="Shorten"
-                        disabled={isShortenLoading}
-                    >
-                        {isShortenLoading ? '⏳ Loading...' : '📉 Shorten'}
-                    </button>
-                    
-                    <div style={{ width: '1px', height: '24px', background: '#e0e0e0' }} />
-                    
-                    <div style={{ width: '1px', height: '24px', background: '#e0e0e0' }} />
-                    
-                    <button
-                        style={buttonStyle}
-                        onMouseEnter={(e) => Object.assign(e.target.style, buttonHoverStyle)}
-                        onMouseLeave={(e) => Object.assign(e.target.style, buttonStyle)}
-                        onClick={onClose}
-                        title="Close"
-                    >
-                        ✕
-                    </button>
-                </div>
-            ) : isEditing ? (
-                <div style={{ padding: '12px', minWidth: '300px' }}>
-                    <textarea
-                        value={editText}
-                        onChange={(e) => setEditText(e.target.value)}
-                        style={{
-                            width: '100%',
-                            minHeight: '80px',
-                            marginBottom: '8px',
-                            padding: '8px',
-                            border: '1px solid #d9d9d9',
-                            borderRadius: '4px',
-                            resize: 'vertical',
-                            fontSize: '13px',
-                            fontFamily: 'inherit'
-                        }}
-                        placeholder="Edit component content..."
-                        autoFocus
-                    />
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                        <Button size="small" onClick={handleCancel}>
-                            Cancel
-                        </Button>
-                        <Button size="small" type="primary" onClick={handleSave}>
-                            Save
-                        </Button>
-                    </div>
-                </div>
-            ) : isQuickfixing ? (
-                <div style={{ padding: '12px', minWidth: '600px', maxWidth: '1000px' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#333' }}>
-                        Stylebook Recommendations
-                    </div>
-                    
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Current Content:</div>
-                        <div style={{
-                            padding: '8px',
-                            background: '#f5f5f5',
-                            borderRadius: '4px',
-                            fontSize: '12px',
-                            lineHeight: '1.5',
-                            maxHeight: '80px',
-                            overflow: 'auto'
-                        }}>
-                            {component.content}
-                        </div>
-                    </div>
-
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>Select a recommendation:</div>
-                        <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '8px' }}>
-                            {quickfixRecommendations.map((rec, index) => (
-                                <div
-                                    key={index}
-                                    onClick={() => setSelectedRecommendation(rec)}
-                                    style={{
-                                        minWidth: '180px',
-                                        maxWidth: '400px',
-                                        padding: '12px',
-                                        border: selectedRecommendation === rec ? '2px solid #1890ff' : '1px solid #d9d9d9',
-                                        borderRadius: '8px',
-                                        cursor: 'pointer',
-                                        background: selectedRecommendation === rec ? '#f0f9ff' : '#fff',
-                                        flexShrink: 0,
-                                        textAlign: 'center'
-                                    }}
-                                >
-                                    <img 
-                                        src={stylebookSVG} 
-                                        alt="Stylebook" 
-                                        style={{ width: '100px', height: '80px', marginBottom: '8px' }}
-                                    />
-                                    <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#1890ff', marginBottom: '8px', textAlign: 'left' }}>
-                                        {rec.stylebook_reference}
-                                    </div>
-                                    <div style={{ fontSize: '13px', lineHeight: '1.4', textAlign: 'left', marginBottom: '12px' }}>
-                                        {rec.recommended_revision}
-                                    </div>
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setDetailsModal({ visible: true, recommendation: rec });
-                                        }}
-                                        style={{
-                                            background: 'none',
-                                            border: '1px solid #d9d9d9',
-                                            borderRadius: '4px',
-                                            padding: '4px 8px',
-                                            fontSize: '10px',
-                                            color: '#666',
-                                            cursor: 'pointer',
-                                            display: 'block',
-                                            margin: '0 auto'
-                                        }}
-                                    >
-                                        View Details
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', borderTop: '1px solid #e0e0e0', paddingTop: '12px' }}>
-                        <Button size="small" onClick={handleCancelQuickfix}>
-                            Cancel
-                        </Button>
-                        <Button 
-                            size="small" 
-                            type="primary" 
-                            onClick={handleApplyQuickfix}
-                            disabled={!selectedRecommendation}
-                        >
-                            Apply
-                        </Button>
-                    </div>
-                </div>
-            ) : isExpanding ? (
-                <div style={{ padding: '12px', minWidth: '400px', maxWidth: '600px' }}>
-                    <div style={{ marginBottom: '12px', fontSize: '14px', fontWeight: 'bold' }}>Content Expansion</div>
-                    
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Original Content:</div>
-                        <div style={{ 
-                            padding: '8px', 
-                            background: '#f5f5f5', 
-                            borderRadius: '4px', 
-                            fontSize: '12px',
-                            maxHeight: '100px',
-                            overflow: 'auto'
-                        }}>
-                            {component.content}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Expanded Content:</div>
-                        <div style={{ 
-                            padding: '8px', 
-                            background: '#e6f7ff', 
-                            borderRadius: '4px', 
-                            fontSize: '12px',
-                            maxHeight: '150px',
-                            overflow: 'auto'
-                        }}>
-                            {expandedContent}
-                        </div>
-                    </div>
-                    
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                        <button
-                            onClick={handleCancelExpand}
-                            style={{
-                                padding: '6px 12px',
-                                border: '1px solid #d9d9d9',
-                                background: 'white',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '12px'
-                            }}
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            onClick={handleApplyExpand}
-                            style={{
-                                padding: '6px 12px',
-                                border: 'none',
-                                background: '#1890ff',
-                                color: 'white',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '12px'
-                            }}
-                        >
-                            Apply
-                        </button>
-                    </div>
-                </div>
-            ) : isShortening ? (
-                <div style={{ padding: '12px', minWidth: '400px', maxWidth: '600px' }}>
-                    <div style={{ marginBottom: '12px', fontSize: '14px', fontWeight: 'bold' }}>Content Shortening</div>
-                    
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Original Content:</div>
-                        <div style={{ 
-                            padding: '8px', 
-                            background: '#f5f5f5', 
-                            borderRadius: '4px', 
-                            fontSize: '12px',
-                            maxHeight: '100px',
-                            overflow: 'auto'
-                        }}>
-                            {component.content}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Shortened Content:</div>
-                        <div style={{ 
-                            padding: '8px', 
-                            background: '#fff2e8', 
-                            borderRadius: '4px', 
-                            fontSize: '12px',
-                            maxHeight: '150px',
-                            overflow: 'auto'
-                        }}>
-                            {shortenedContent}
-                        </div>
-                    </div>
-                    
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                        <button
-                            onClick={handleCancelShorten}
-                            style={{
-                                padding: '6px 12px',
-                                border: '1px solid #d9d9d9',
-                                background: 'white',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '12px'
-                            }}
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            onClick={handleApplyShorten}
-                            style={{
-                                padding: '6px 12px',
-                                border: 'none',
-                                background: '#1890ff',
-                                color: 'white',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '12px'
-                            }}
-                        >
-                            Apply
-                        </button>
-                    </div>
-                </div>
-            ) : isManualEditing ? (
-                <div style={{ padding: '12px', minWidth: '400px', maxWidth: '600px' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#333' }}>
-                        Manual Edit
-                    </div>
-                    
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Original Content:</div>
-                        <div style={{
-                            padding: '8px',
-                            background: '#f5f5f5',
-                            borderRadius: '4px',
-                            fontSize: '13px',
-                            lineHeight: '1.4',
-                            maxHeight: '80px',
-                            overflow: 'auto'
-                        }}>
-                            {component.content}
-                        </div>
-                    </div>
-
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Edit Content:</div>
-                        <Input.TextArea
-                            value={manualEditContent}
-                            onChange={(e) => setManualEditContent(e.target.value)}
-                            placeholder="Edit the content as you wish..."
-                            rows={6}
-                            style={{ fontSize: '13px' }}
-                        />
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', borderTop: '1px solid #e0e0e0', paddingTop: '12px' }}>
-                        <Button size="small" onClick={handleCancelManualEdit}>
-                            Cancel
-                        </Button>
-                        <Button 
-                            size="small" 
-                            type="primary" 
-                            onClick={handleApplyManualEdit}
-                            disabled={!manualEditContent.trim() || manualEditContent === component.content}
-                        >
-                            Apply
-                        </Button>
-                    </div>
-                </div>
-            ) : isModificationRecord ? (
-                <div style={{ padding: '12px', minWidth: '400px', maxWidth: '500px' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#333' }}>
-                        Adding Modification Record
-                    </div>
-                    
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Original Text:</div>
-                        <Input.TextArea
-                            value={originalTextInput}
-                            onChange={(e) => setOriginalTextInput(e.target.value)}
-                            placeholder="Enter the original text..."
-                            rows={3}
-                            style={{ fontSize: '13px' }}
-                        />
-                    </div>
-
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Revised Text:</div>
-                        <Input.TextArea
-                            value={revisedTextInput}
-                            onChange={(e) => setRevisedTextInput(e.target.value)}
-                            placeholder="Enter the revised text..."
-                            rows={3}
-                            style={{ fontSize: '13px' }}
-                        />
-                    </div>
-
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Modification Reason:</div>
-                        <Input.TextArea
-                            value={modificationReasonInput}
-                            onChange={(e) => setModificationReasonInput(e.target.value)}
-                            placeholder="Enter the reason for this modification..."
-                            rows={2}
-                            style={{ fontSize: '13px' }}
-                        />
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', borderTop: '1px solid #e0e0e0', paddingTop: '12px' }}>
-                        <Button size="small" onClick={handleCancelModificationRecord}>
-                            Cancel
-                        </Button>
-                        <Button 
-                            size="small" 
-                            type="primary" 
-                            onClick={handleSaveModificationRecord}
-                            loading={modificationRecordLoading}
-                            disabled={!originalTextInput.trim() || !revisedTextInput.trim() || !modificationReasonInput.trim()}
-                        >
-                            Save Record
-                        </Button>
-                    </div>
-                </div>
-            ) : (
-                <div style={{ padding: '12px', minWidth: '400px', maxWidth: '500px' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#333' }}>
-                        AI Rewrite
-                    </div>
-                    
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Current Content:</div>
-                        <div style={{
-                            padding: '8px',
-                            background: '#f5f5f5',
-                            borderRadius: '4px',
-                            fontSize: '13px',
-                            lineHeight: '1.4',
-                            maxHeight: '80px',
-                            overflow: 'auto'
-                        }}>
-                            {component.content}
-                        </div>
-                    </div>
-
-                    <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Rewrite Prompt:</div>
-                        <Input.TextArea
-                            value={rewritePrompt}
-                            onChange={(e) => setRewritePrompt(e.target.value)}
-                            placeholder="Enter your rewrite instructions (e.g., 'Make it more formal', 'Shorten this', 'Add more details')..."
-                            rows={2}
-                            style={{ fontSize: '13px' }}
-                        />
-                        <div style={{ marginTop: '8px', textAlign: 'right' }}>
-                            <Button 
-                                size="small" 
-                                type="primary" 
-                                onClick={handleGenerateRewrite}
-                                loading={isRewriteLoading}
-                                disabled={!rewritePrompt.trim()}
-                            >
-                                Rewrite
-                            </Button>
-                        </div>
-                    </div>
-
-                    {newContent && (
-                        <div style={{ marginBottom: '12px' }}>
-                            <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>New Content:</div>
-                            <div style={{
-                                padding: '8px',
-                                background: '#f0f9ff',
-                                border: '1px solid #bae6fd',
-                                borderRadius: '4px',
-                                fontSize: '13px',
-                                lineHeight: '1.4',
-                                maxHeight: '120px',
-                                overflow: 'auto'
-                            }}>
-                                {newContent}
-                            </div>
-                        </div>
-                    )}
-
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', borderTop: '1px solid #e0e0e0', paddingTop: '12px' }}>
-                        <Button size="small" onClick={handleCancelRewrite}>
-                            Cancel
-                        </Button>
-                        <Button 
-                            size="small" 
-                            type="primary" 
-                            onClick={handleApplyRewrite}
-                            disabled={!newContent}
-                        >
-                            Apply
-                        </Button>
-                    </div>
-                </div>
-            )}
-            
-            <Modal
-                title="Stylebook Details"
-                open={detailsModal.visible}
-                onCancel={() => setDetailsModal({ visible: false, recommendation: null })}
-                footer={[
-                    <Button key="back" onClick={() => setDetailsModal({ visible: false, recommendation: null })}>
-                        Back
-                    </Button>
-                ]}
-                width={1000}
-            >
-                {detailsModal.recommendation && (
-                    <DetailsModalContent 
-                        recommendation={detailsModal.recommendation} 
-                        globalTaskId={globalTaskId}
-                        globalUsername={globalUsername}
-                    />
-                )}
-            </Modal>
-        </div>
-    );
-};
-
-// Details Modal Content Component
-const DetailsModalContent = ({ recommendation, globalTaskId, globalUsername }) => {
-    const [stylebookData, setStylebookData] = useState(null);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        const fetchStylebookData = async () => {
-            try {
-                const response = await axios.get(`http://localhost:3001/user-data/${globalUsername}/AdaptiveStylebook/AdaptiveStylebook.json`);
-                const stylebook = response.data;
-                const matchingRecord = stylebook.revision_records?.find(record => 
-                    record.modification_name === recommendation.stylebook_reference ||
-                    record.modification_name.toLowerCase().includes(recommendation.stylebook_reference.toLowerCase()) ||
-                    recommendation.stylebook_reference.toLowerCase().includes(record.modification_name.toLowerCase())
-                );
-                setStylebookData(matchingRecord);
-            } catch (error) {
-                console.error('Failed to load stylebook details:', error);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchStylebookData();
-    }, [recommendation, globalUsername]);
-
-    if (loading) {
-        return <div style={{ textAlign: 'center', padding: '20px' }}>Loading...</div>;
-    }
-
-    return (
-        <div>
-            <div style={{ marginBottom: '20px', padding: '12px', background: '#f0f9ff', borderRadius: '6px' }}>
-                <h4 style={{ margin: '0 0 8px 0', color: '#1890ff' }}>Revision Reason</h4>
-                <p style={{ margin: 0, lineHeight: '1.5' }}>
-                    {recommendation.revision_reason || 'No revision reason provided'}
-                </p>
-            </div>
-            
-            <div style={{ padding: '12px', background: '#f9f9f9', borderRadius: '6px' }}>
-                <h4 style={{ margin: '0 0 12px 0', color: '#333' }}>Stylebook Information</h4>
-                {stylebookData ? (
-                    <div style={{ fontSize: '13px', lineHeight: '1.6' }}>
-                        <div style={{ marginBottom: '12px' }}>
-                            <strong>Modification Name:</strong>
-                            <div style={{ marginTop: '4px', padding: '8px', background: '#fff', borderRadius: '4px' }}>
-                                {stylebookData.modification_name}
-                            </div>
-                        </div>
-                        
-                        <div style={{ marginBottom: '12px' }}>
-                            <strong>Original Text:</strong>
-                            <div style={{ marginTop: '4px', padding: '8px', background: '#fff', borderRadius: '4px' }}>
-                                {stylebookData.original_text}
-                            </div>
-                        </div>
-                        
-                        <div style={{ marginBottom: '12px' }}>
-                            <strong>Revised Text:</strong>
-                            <div style={{ marginTop: '4px', padding: '8px', background: '#fff', borderRadius: '4px' }}>
-                                {stylebookData.revised_text}
-                            </div>
-                        </div>
-                        
-                        <div style={{ marginBottom: '12px' }}>
-                            <strong>Modification Reason:</strong>
-                            <div style={{ marginTop: '4px', padding: '8px', background: '#fff', borderRadius: '4px' }}>
-                                {stylebookData.modification_reason}
-                            </div>
-                        </div>
-                        
-                        <div style={{ marginBottom: '12px' }}>
-                            <strong>Receiver Description:</strong>
-                            <div style={{ marginTop: '4px', padding: '8px', background: '#fff', borderRadius: '4px' }}>
-                                {stylebookData.receiver_description}
-                            </div>
-                        </div>
-                        
-                        <div style={{ marginBottom: '0' }}>
-                            <strong>Occasion Description:</strong>
-                            <div style={{ marginTop: '4px', padding: '8px', background: '#fff', borderRadius: '4px' }}>
-                                {stylebookData.occasion_description}
-                            </div>
-                        </div>
-                    </div>
-                ) : (
-                    <p style={{ color: '#666', fontStyle: 'italic' }}>
-                        No detailed stylebook information found for "{recommendation.stylebook_reference}"
-                    </p>
-                )}
-            </div>
-        </div>
-    );
-};
 
 // Toolbar Button Component
 const ToolbarButton = ({ format, children, isActive, onMouseDown, compact }) => {
@@ -3294,14 +1819,12 @@ const Toolbar = ({ compact = false, trailing = null }) => {
     // The body card opens with the formatting toolbar and the copy button, like a mail window
     const renderBodyHeader = () => <Toolbar compact trailing={renderCopyButton('body')} />;
     // cards: the grey frame around the scrolling area (the 16px sides and the space above and below)
-    const EditorFrame = EXPERIMENT.cond === 'cards' ? 'div' : React.Fragment;
-    const frameProps = EXPERIMENT.cond === 'cards'
-        ? { className: 'card-frame', style: { flex: 1, minHeight: 0, background: '#f5f6f8', padding: '16px 16px 20px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', position: 'relative' } }
-        : {};
+    const EditorFrame = 'div';
+    const frameProps = { className: 'card-frame', style: { flex: 1, minHeight: 0, background: '#f5f6f8', padding: '16px 16px 20px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', position: 'relative' } };
     // The scrollbar track starts below the fixed head: its height is handed to the stylesheet
     useEffect(() => {
         const scroller = editorScrollRef.current;
-        if (EXPERIMENT.cond !== 'cards' || !scroller) return;
+        if (!scroller) return;
         const head = scroller.querySelector('.editor-sticky-head');
         const subject = scroller.querySelector('.subject-row');
         const frame = scroller.parentElement;
@@ -3314,61 +1837,59 @@ const Toolbar = ({ compact = false, trailing = null }) => {
     // edge and the header, the last one the bottom edge, and all of them the sides (flow-root keeps the paragraph margins inside)
     const renderElement = (props) => {
         const { attributes, children, element } = props;
-        if (EXPERIMENT.cond === 'cards') {
-            const layout = sectionLayout();
-            const index = layout ? editor.children.indexOf(element) : -1;
-            if (index !== -1) {
-                const last = editor.children.length - 1;
-                let kind = null;
-                let first = false;
-                let closing = false;
-                if (index === layout.subjectIndex) {
-                    // Like the subject line of a mail window: a label, the text on a line, the copy button at the end
-                    // The subject line and the top of the body card (its toolbar) stay in place at the top while the body scrolls
-                    // under them (sticky); the paragraphs of the body follow as the rest of the card
-                    return (
+        const layout = sectionLayout();
+        const index = layout ? editor.children.indexOf(element) : -1;
+        if (index !== -1) {
+            const last = editor.children.length - 1;
+            let kind = null;
+            let first = false;
+            let closing = false;
+            if (index === layout.subjectIndex) {
+                // Like the subject line of a mail window: a label, the text on a line, the copy button at the end
+                // The subject line and the top of the body card (its toolbar) stay in place at the top while the body scrolls
+                // under them (sticky); the paragraphs of the body follow as the rest of the card
+                return (
+                    <div
+                        {...attributes}
+                        className="editor-sticky-head"
+                        style={{ position: 'sticky', top: 0, zIndex: 3, background: '#f5f6f8', flex: 'none' }}
+                    >
                         <div
-                            {...attributes}
-                            className="editor-sticky-head"
-                            style={{ position: 'sticky', top: 0, zIndex: 3, background: '#f5f6f8', flex: 'none' }}
+                            className="subject-row"
+                            style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: BOX_BORDER, margin: '0 4px 20px', minHeight: '44px' }}
                         >
-                            <div
-                                className="subject-row"
-                                style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: BOX_BORDER, margin: '0 4px 20px', minHeight: '44px' }}
-                            >
-                                <span contentEditable={false} style={{ color: '#8c8c8c', fontSize: '15px', userSelect: 'none', flex: 'none' }}>Subject:</span>
-                                <div style={{ flex: 1, minWidth: 0 }}>{renderPlainElement({ attributes: {}, children, element })}</div>
-                                <span contentEditable={false} style={{ flex: 'none' }}>{renderCopyButton('subject')}</span>
-                            </div>
-                            <div
-                                contentEditable={false}
-                                // the white card is drawn behind the scroller (see .card-bg)
-                                style={{ background: '#fff', padding: '0 16px', margin: 0, borderRadius: `${BOX_RADIUS}px ${BOX_RADIUS}px 0 0` }}
-                            >
-                                {renderBodyHeader()}
-                            </div>
+                            <span contentEditable={false} style={{ color: '#8c8c8c', fontSize: '15px', userSelect: 'none', flex: 'none' }}>Subject:</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>{renderPlainElement({ attributes: {}, children, element })}</div>
+                            <span contentEditable={false} style={{ flex: 'none' }}>{renderCopyButton('subject')}</span>
                         </div>
-                    );
-                }
-                // With a subject line the top of the card (with the toolbar) belongs to the fixed head above, so no paragraph opens it
-                if (layout.bodyIndex !== -1 && index >= layout.bodyIndex) { kind = 'body'; first = index === layout.bodyIndex && layout.subjectIndex === -1; closing = index === last; }
-                if (kind) {
-                    return (
                         <div
-                            {...attributes}
-                            style={{
-                                display: 'flow-root',
-                                // the card itself (white, border, corners) is drawn behind the scroller, so the scrollbar sits inside it
-                                padding: `0 16px ${closing ? 8 : 0}px`,
-                                marginTop: 0,
-                                flex: closing ? '1 0 auto' : 'none'
-                            }}
+                            contentEditable={false}
+                            // the white card is drawn behind the scroller (see .card-bg)
+                            style={{ background: '#fff', padding: '0 16px', margin: 0, borderRadius: `${BOX_RADIUS}px ${BOX_RADIUS}px 0 0` }}
                         >
-                            {first && renderBodyHeader()}
-                            {renderPlainElement({ attributes: {}, children, element })}
+                            {renderBodyHeader()}
                         </div>
-                    );
-                }
+                    </div>
+                );
+            }
+            // With a subject line the top of the card (with the toolbar) belongs to the fixed head above, so no paragraph opens it
+            if (layout.bodyIndex !== -1 && index >= layout.bodyIndex) { kind = 'body'; first = index === layout.bodyIndex && layout.subjectIndex === -1; closing = index === last; }
+            if (kind) {
+                return (
+                    <div
+                        {...attributes}
+                        style={{
+                            display: 'flow-root',
+                            // the card itself (white, border, corners) is drawn behind the scroller, so the scrollbar sits inside it
+                            padding: `0 16px ${closing ? 8 : 0}px`,
+                            marginTop: 0,
+                            flex: closing ? '1 0 auto' : 'none'
+                        }}
+                    >
+                        {first && renderBodyHeader()}
+                        {renderPlainElement({ attributes: {}, children, element })}
+                    </div>
+                );
             }
         }
         return renderPlainElement(props);
@@ -3390,141 +1911,12 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         }
     };
 
-// New function to apply dimension markers to all components at once
-const applyAllDimensions = () => {
-    if (!combinedResults || combinedResults.length === 0) {
-        console.log('No combined results available');
-        return;
-    }
 
-    let newValue = [...value];
-    
-    // Apply dimensions for each component
-    combinedResults.forEach(component => {
-        if (component.linkedIntents && component.linkedIntents.length > 0) {
-            newValue = applyDimensionsToValue(newValue, component.content, component.id, component.linkedIntents);
-        }
-    });
-    
-    setValue(newValue);
-    setEditorKey(prev => prev + 1);
-};
-
-// Modified function to apply dimensions without removing existing ones
-const applyDimensionsToValue = (editorValue, componentContent, componentId, linkedIntents) => {
-    console.log('Applying dimensions for component:', componentId);
-    console.log('Component content:', componentContent);
-    
-    const position = findTextInEditor(componentContent, editorValue);
-    if (!position) {
-        console.log('Position not found for component:', componentId);
-        return editorValue;
-    }
-
-    console.log('Found position:', position);
-
-    // Build position mapping: from normalized text position to actual node positions
-    let currentNormalizedPos = 0;
-    let nodePositions = [];
-    
-    editorValue.forEach((node, nodeIndex) => {
-        const nodeText = getNodeText(null, node);
-        const normalizedNodeText = nodeText.replace(/\s+/g, ' ').trim().toLowerCase();
-        
-        nodePositions.push({
-            nodeIndex,
-            originalText: nodeText,
-            normalizedText: normalizedNodeText,
-            normalizedStart: currentNormalizedPos,
-            normalizedEnd: currentNormalizedPos + normalizedNodeText.length,
-            node
-        });
-        
-        currentNormalizedPos += normalizedNodeText.length;
-        if (nodeIndex < editorValue.length - 1) {
-            currentNormalizedPos += 1; // Space between paragraphs
-        }
-    });
-
-    // Find nodes that need dimension markers
-    const highlightStart = position.start;
-    const highlightEnd = position.end;
-    
-    const affectedNodes = nodePositions.filter(pos => 
-        !(pos.normalizedEnd <= highlightStart || pos.normalizedStart >= highlightEnd)
-    );
-
-    if (affectedNodes.length === 0) {
-        return editorValue;
-    }
-
-    // Apply dimension markers to affected nodes
-    const newValue = editorValue.map((node, nodeIndex) => {
-        const nodePos = nodePositions.find(pos => pos.nodeIndex === nodeIndex);
-        if (!nodePos || !affectedNodes.includes(nodePos)) {
-            return node;
-        }
-
-        // Calculate highlight range within current node
-        const nodeStart = Math.max(0, highlightStart - nodePos.normalizedStart);
-        const nodeEnd = Math.min(nodePos.normalizedText.length, highlightEnd - nodePos.normalizedStart);
-
-        if (nodeStart >= nodeEnd) {
-            return node;
-        }
-
-        // Map to original text positions
-        const originalText = nodePos.originalText;
-        let originalStart = 0;
-        let originalEnd = originalText.length;
-
-        // For partial matches, estimate positions
-        if (nodeStart > 0 || nodeEnd < nodePos.normalizedText.length) {
-            const startRatio = nodeStart / nodePos.normalizedText.length;
-            const endRatio = nodeEnd / nodePos.normalizedText.length;
-            
-            originalStart = Math.floor(originalText.length * startRatio);
-            originalEnd = Math.ceil(originalText.length * endRatio);
-        }
-
-        // Ensure valid boundaries
-        originalStart = Math.max(0, Math.min(originalStart, originalText.length));
-        originalEnd = Math.max(originalStart, Math.min(originalEnd, originalText.length));
-
-        // Split text and apply dimension markers
-        const beforeText = originalText.substring(0, originalStart);
-        const dimensionText = originalText.substring(originalStart, originalEnd);
-        const afterText = originalText.substring(originalEnd);
-
-        const newChildren = [];
-        if (beforeText) {
-            newChildren.push({ text: beforeText });
-        }
-        if (dimensionText) {
-            newChildren.push({ 
-                text: dimensionText, 
-                hasDimensions: true, 
-                componentId: componentId,
-                linkedIntents: linkedIntents
-            });
-        }
-        if (afterText) {
-            newChildren.push({ text: afterText });
-        }
-
-        return {
-            ...node,
-            children: newChildren.length > 0 ? newChildren : [{ text: originalText }]
-        };
-    });
-
-    return newValue;
-};
 // cards: every unit is clickable, also one without intents. The unit's text is found inside a single paragraph (tolerant of
 // whitespace and quote style) and only that stretch is marked; leaves already marked for other units of the same paragraph stay
-// as they are. A unit that runs over several paragraphs goes through addDimensionsToValue.
-const markUnitInValue = (editorValue, content, componentId, linkedIntents) => {
-    const meta = { hasDimensions: linkedIntents.length > 0, linkedIntents, componentId };
+// as they are. A unit that runs over several paragraphs goes through markUnitAcrossParagraphs.
+const markUnitInValue = (editorValue, content, componentId) => {
+    const meta = { componentId };
     let found = -1;
     let span = null;
     editorValue.forEach((node, i) => {
@@ -3532,7 +1924,7 @@ const markUnitInValue = (editorValue, content, componentId, linkedIntents) => {
         const match = locateUnitText(getNodeText(null, node), content);
         if (match) { found = i; span = match; }
     });
-    if (found === -1) return addDimensionsToValue(editorValue, content, componentId, linkedIntents);
+    if (found === -1) return markUnitAcrossParagraphs(editorValue, content, componentId);
     return editorValue.map((node, i) => {
         if (i !== found) return node;
         const children = [];
@@ -3552,28 +1944,9 @@ const markUnitInValue = (editorValue, content, componentId, linkedIntents) => {
         return { ...node, children };
     });
 };
-// 2. 新增：为所有components初始化dimension标记的函数
-const initializeAllDimensions = () => {
-    if (!combinedResults || combinedResults.length === 0) {
-        console.log('No combined results available');
-        return;
-    }
-
-    let newValue = [...value];
-    
-    // 为每个component添加dimension标记
-    combinedResults.forEach(component => {
-        if (component.linkedIntents && component.linkedIntents.length > 0) {
-            newValue = addDimensionsToValue(newValue, component.content, component.id, component.linkedIntents);
-        }
-    });
-    
-    setValue(newValue);
-    setEditorKey(prev => prev + 1);
-};
 
 // 3. 新增：为特定component内容添加dimension标记的函数
-const addDimensionsToValue = (editorValue, componentContent, componentId, linkedIntents) => {
+const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) => {
     const position = findTextInEditor(componentContent, editorValue);
     if (!position) {
         console.log('Position not found for component:', componentId);
@@ -3655,15 +2028,9 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             newChildren.push({ text: beforeText });
         }
         if (dimensionText) {
-            // 判断是否为第一个文本节点（用于显示dimension圆圈）
-            const isFirstTextNode = (affectedNode === affectedNodes[0]) && (validStart === 0) && (newChildren.length === 0);
-            
             newChildren.push({ 
                 text: dimensionText,
-                hasDimensions: true,
-                componentId: componentId,
-                linkedIntents: linkedIntents,
-                isFirstTextNode: isFirstTextNode
+                componentId: componentId
             });
         }
         if (afterText) {
@@ -3678,36 +2045,9 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
     return newValue;
 };
-    // Color palette for dimension circles
-    const colorPalette = ['#ff7875', '#ff9c6e', '#ffc069', '#d3f261', '#ffd666', '#fff566', '#95de64', '#5cdbd3', '#b37feb', '#ff85c0','#ffa39e','#ffbb96','#ffd591','#eaff8f','#ffe58f','#fffb8f','#b7eb8f','#87e8de','#d3adf7','#ffadd2'];
     
-    // Track dimension-to-color mapping to prevent duplicates
-    const dimensionColorMapRef = useRef(new Map());
 
-    // Keep each intent's options in the order they were first shown, so selecting one does not move it
-    const intentOptionOrderRef = useRef(new Map());
-    const getIntentOptions = (intent) => {
-        const values = [intent.current_value, ...intent.other_values];
-        const saved = intentOptionOrderRef.current.get(intent.dimension);
-        if (saved && saved.length === values.length && values.every(value => saved.includes(value))) {
-            return saved;
-        }
-        intentOptionOrderRef.current.set(intent.dimension, values);
-        return values;
-    };
     
-    // Helper function to get unique dimension color from palette
-    const getDimensionColor = (dimension) => {
-        if (dimensionColorMapRef.current.has(dimension)) {
-            return dimensionColorMapRef.current.get(dimension);
-        }
-        
-        const usedColors = new Set(dimensionColorMapRef.current.values());
-        const availableColor = colorPalette.find(color => !usedColors.has(color)) || colorPalette[0];
-        
-        dimensionColorMapRef.current.set(dimension, availableColor);
-        return availableColor;
-    };
 
     // cards: while the email and its components are made, the page has the same frame as the finished one with nothing in it:
     // the subject line and the body box (with its toolbar), the component list and the intents area
@@ -3766,10 +2106,10 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         </div>
     );
 
-    const showGuide = EXPERIMENT.cond === 'cards' && !!globalUsername && hasDraft && !draftGenerating
-        && (EXPERIMENT.cond === 'cards' ? components.length > 0 : components.length === 0) && !guideSeen;
+    const showGuide = !!globalUsername && hasDraft && !draftGenerating
+        && (components.length > 0) && !guideSeen;
 
-    // cards condition: intent pills, version cards and the follow-up notice
+    // intent pills, version cards and the follow-up notice
     const renderCardsIntents = () => {
         const unit = selectedComponentId ? combinedResults.find(component => component.id === selectedComponentId) : null;
         const intents = (unit && unit.linkedIntents) || [];
@@ -3898,24 +2238,15 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             element = <u>{element}</u>;
         }
         
-        // // 检查是否有dimension标记或高亮
-        const hasDimensions = leaf.hasDimensions && leaf.linkedIntents && leaf.linkedIntents.length > 0;
         const isHighlighted = leaf.highlight;
 
-        const isCards = EXPERIMENT.cond === 'cards';
-        // cards: every unit is clickable, also one without intents
-        if (hasDimensions || isHighlighted || (isCards && leaf.componentId)) {
-            // 根据是否高亮设置不同的文本样式
-            const textStyle = isHighlighted && isCards ? {
+        // every unit is clickable, also one without intents
+        if (isHighlighted || leaf.componentId) {
+            const textStyle = isHighlighted ? {
                 backgroundColor: '#fff3c4',
                 borderRadius: '4px',
                 padding: '1px 2px',
                 cursor: 'text'
-            } : isHighlighted ? {
-                backgroundColor: '#fff3cd',
-                borderRadius: '2px',
-                padding: '1px 2px',
-                cursor: 'pointer'
             } : {
                 cursor: 'pointer'
             };
@@ -3925,13 +2256,12 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     <span
                         {...attributes}
                         style={textStyle}
-                        className={isCards && leaf.componentId ? `unit-leaf${isHighlighted ? ' unit-selected' : ''}` : undefined}
-                        data-unit={isCards && leaf.componentId ? leaf.componentId : undefined}
+                        className={leaf.componentId ? `unit-leaf${isHighlighted ? ' unit-selected' : ''}` : undefined}
+                        data-unit={leaf.componentId ? leaf.componentId : undefined}
                         onClick={leaf.componentId ? (e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            if (isCards) handleUnitClick(e, leaf.componentId);
-                            else handleHighlightClick(e, leaf.componentId);
+                            handleUnitClick(e, leaf.componentId);
                         } : undefined}
                     >
                         {element}
@@ -3946,57 +2276,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
 
 
-    const handleDimensionClick = (intent, componentId) => {
-        console.log('Dimension clicked:', intent.dimension, 'for component:', componentId);
-        
-        // 如果toolbar还显示，则关闭它
-        if (floatingToolbar.visible) {
-            closeFloatingToolbar();
-        }
-        
-        // 查找对应的组件
-        const component = components.find(c => c.id === componentId);
-        if (!component) {
-            console.log('Component not found:', componentId);
-            return;
-        }
-
-        // 检查当前组件是否已经被选中和高亮
-        const isCurrentlySelected = selectedComponentId === componentId;
-        const isCurrentlyHighlighted = value.some(node => 
-            node.children.some(child => 
-                child.highlight && child.componentId === componentId
-            )
-        );
-
-        // 如枟已经选中且高亮，则不执行任何操作
-        if (isCurrentlySelected && isCurrentlyHighlighted) {
-            console.log('Component already selected and highlighted, no action needed');
-            return;
-        }
-
-        // Check if there was a previous modification and show modal (cards: no modification record is asked for)
-        if (EXPERIMENT.cond !== 'cards' && lastModifiedComponent && lastModifiedComponent.componentId !== componentId) {
-            setChangeModal({
-                visible: true,
-                oldContent: lastModifiedComponent.oldContent,
-                newContent: lastModifiedComponent.newContent,
-                componentId: lastModifiedComponent.componentId
-            });
-            return;
-        }
-
-        // 选中对应的组件
-        console.log('Selecting component:', component.id);
-        setSelectedComponentId(component.id);
-        
-        // 高亮对应的内容
-        console.log('Highlighting component content:', component.content);
-        applyHighlighting(component.content, component.id);
-        
-        // 可选：显示提示信息
-        message.info(`Selected dimension: ${intent.dimension}`);
-    };
 
     // Replace a component's text in the editor and sync all dependent state; returns true on success
     const replaceComponentText = (selectedComponentId, previewContent, intentSelected) => {
@@ -4046,9 +2325,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     children: [{
                         text: updatedText,
                         highlight: true,
-                        componentId: selectedComponentId,
-                        hasDimensions: linkedIntents.length > 0,
-                        linkedIntents: linkedIntents
+                        componentId: selectedComponentId
                     }]
                 };
             }
@@ -4095,45 +2372,10 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         };
         saveDraft();
         
-        // Clear preview content
-        setPreviewContent('');
-        
-        // Track this modification for potential modal display
-        setLastModifiedComponent({
-            componentId: selectedComponentId,
-            oldContent: selectedComponent.content,
-            newContent: previewContent
-        });
-        
         message.success('Component content updated successfully');
         return true;
     };
 
-    // Handle applying preview content to selected component
-    const handleApplyToSelectedComponent = (intentSelected) => {
-        if (!selectedComponentId || !previewContent) {
-            message.warning('No component selected or no preview content available');
-            return;
-        }
-
-        const appliedContent = previewContent;
-        const applied = replaceComponentText(selectedComponentId, appliedContent, intentSelected);
-        if (applied && EXPERIMENT.cond === 'baseline') {
-            const session = previewSessionRef.current;
-            if (session) {
-                logEvent({
-                    unit_id: session.unitId,
-                    unit_title: session.unitTitle,
-                    intent_dimension: session.dimension,
-                    event: 'apply',
-                    shown_values: session.shownValues,
-                    chosen_value: session.lastValue,
-                    duration_ms: Date.now() - session.firstPreviewAt
-                });
-                previewSessionRef.current = null;
-            }
-        }
-    };
 
     // cards: "Describe changes" box under a text selection. It opens only for a selection inside one unit, the rewrite is
     // previewed first, and accepting replaces just the selected words of that unit.
@@ -4153,7 +2395,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     closeRewriteBoxRef.current = closeRewriteBox;
 
     const evaluateSelectionForRewrite = (event) => {
-        if (EXPERIMENT.cond !== 'cards') return;
         if (event && rewriteBoxElementRef.current && rewriteBoxElementRef.current.contains(event.target)) return;
         const dismiss = () => { if (rewriteBoxStateRef.current) closeRewriteBox(); };
         const scroller = editorScrollRef.current;
@@ -4344,7 +2585,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     // mousemove and not mouseover: a render or a remount of the editor (a click that selects a unit) drops the tint while the mouse
     // stays on the unit, and no mouseover comes then; the next small move puts it back
     const handleUnitMouseMove = (event) => {
-        if (EXPERIMENT.cond !== 'cards') return;
         const element = event.target && event.target.closest ? event.target.closest('[data-unit]') : null;
         const unitId = element ? element.getAttribute('data-unit') : null;
         if (unitId === hoveredUnitRef.current && (!unitId || element.classList.contains('unit-hover'))) return;
@@ -4384,7 +2624,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         if (slateHistory && (redo ? slateHistory.redos.length : slateHistory.undos.length)) {
             if (redo) editor.redo();
             else editor.undo();
-            if (EXPERIMENT.cond === 'cards') syncUnitContents(null); // a filled-in placeholder may have come back or gone
+            syncUnitContents(null); // a filled-in placeholder may have come back or gone
             return true;
         }
         const history = aiHistoryRef.current;
@@ -4548,7 +2788,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
     // cards: put the tint back after a render that rewrote the class names (DOM only, no state)
     useEffect(() => {
-        if (EXPERIMENT.cond !== 'cards' || !hoveredUnitRef.current || !editorScrollRef.current) return;
+        if (!hoveredUnitRef.current || !editorScrollRef.current) return;
         const id = hoveredUnitRef.current;
         editorScrollRef.current.querySelectorAll(`[data-unit="${window.CSS && window.CSS.escape ? window.CSS.escape(id) : id}"]`)
             .forEach(element => element.classList.add('unit-hover'));
@@ -4556,7 +2796,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
     // cards: Ctrl/Cmd+Z and Shift+Z / Y also work when the keyboard focus is on the page and not in a field
     useEffect(() => {
-        if (EXPERIMENT.cond !== 'cards') return undefined;
         const onKeyDown = (event) => {
             if (!(event.metaKey || event.ctrlKey)) return;
             const key = event.key.toLowerCase();
@@ -4601,66 +2840,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         };
     }, [rewriteBoxOpen]);
 
-    // Modal handlers
-    const handleModalSave = async () => {
-        console.log('Saving modification with reason:', modificationReason);
-        
-        try {
-            setModalSaveLoading(true);
-            
-            // Find the component details
-            const component = components.find(c => c.id === changeModal.componentId);
-            if (!component) {
-                message.error('Component not found');
-                return;
-            }
-
-            // Prepare component data
-            const componentBeforeEdit = {
-                id: component.id,
-                title: component.title,
-                content: changeModal.oldContent
-            };
-
-            const componentAfterEdit = {
-                id: component.id,
-                title: component.title,
-                content: changeModal.newContent
-            };
-
-            // Call the API
-            const response = await axios.post('http://localhost:3001/save-manual-edit-tool', {
-                userTask: userTask,
-                userName: globalUsername,
-                taskId: globalTaskId,
-                userEditReason: modificationReason,
-                componentBeforeEdit: componentBeforeEdit,
-                componentAfterEdit: componentAfterEdit
-            });
-
-            console.log('Manual edit analysis response:', response.data);
-            
-            setChangeModal({ visible: false, oldContent: '', newContent: '', componentId: null });
-            setModificationReason('');
-            setLastModifiedComponent(null);
-            
-            message.success('Modification saved successfully');
-        } catch (error) {
-            console.error('Error saving manual edit:', error);
-            message.error('Failed to save modification');
-        } finally {
-            setModalSaveLoading(false);
-        }
-    };
-
-    const handleModalCancel = () => {
-        setChangeModal({ visible: false, oldContent: '', newContent: '', componentId: null });
-        setModificationReason('');
-        setLastModifiedComponent(null); // Clear lastModifiedComponent to prevent modal from showing again
-        
-        message.info('Modification cancelled');
-    };
-
     // cards: tell the preference model how a display ended (once per display)
     const sendModelUpdate = (cards, event, chosenValue) => callModel('/update', {
         pid: EXPERIMENT.pid,
@@ -4702,38 +2881,22 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         return sendModelUpdate(cards, event, extra.chosen_value || null);
     };
 
-    // Log a leave when a preview (baseline) or cards (cards) were shown but the user moved on without acting
+    // Log a leave when cards were shown but the user moved on without acting
     const flushLeave = () => {
-        if (EXPERIMENT.cond === 'cards') {
-            const cards = cardsRef.current;
-            if (cards && !cards.loading && !cards.error && cards.items.length > 0 && !cards.ended) {
-                const update = endDisplay(cards, 'leave');
-                if (update) update.catch(() => {});
-            }
-            cardsRef.current = null;
-            cardsRequestIdRef.current += 1;
-            setCardsState(null);
-        } else {
-            const session = previewSessionRef.current;
-            if (session) {
-                logEvent({
-                    unit_id: session.unitId,
-                    unit_title: session.unitTitle,
-                    intent_dimension: session.dimension,
-                    event: 'leave',
-                    shown_values: session.shownValues,
-                    duration_ms: Date.now() - session.firstPreviewAt
-                });
-            }
-            previewSessionRef.current = null;
+        const cards = cardsRef.current;
+        if (cards && !cards.loading && !cards.error && cards.items.length > 0 && !cards.ended) {
+            const update = endDisplay(cards, 'leave');
+            if (update) update.catch(() => {});
         }
+        cardsRef.current = null;
+        cardsRequestIdRef.current += 1;
+        setCardsState(null);
     };
 
-    // Switching to another unit while cards / a preview are open counts as leaving
+    // Switching to another unit while cards are open counts as leaving
     useEffect(() => {
         const cardsUnit = cardsRef.current && cardsRef.current.unitId;
-        const sessionUnit = previewSessionRef.current && previewSessionRef.current.unitId;
-        if ((cardsUnit && cardsUnit !== selectedComponentId) || (sessionUnit && sessionUnit !== selectedComponentId)) {
+        if (cardsUnit && cardsUnit !== selectedComponentId) {
             flushLeave();
         }
         if (editWatchRef.current && editWatchRef.current.unitId !== selectedComponentId) {
@@ -4746,7 +2909,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     // cards: clicking one of the top buttons while cards are showing counts as leaving. The listener runs in the
     // capture phase, so the leave is logged before the button's own handler changes anything.
     useEffect(() => {
-        if (EXPERIMENT.cond !== 'cards') return undefined;
         // The buttons are told apart by a mark and not by their text: the "Regenerate" of the version cards has the same text as the
         // one for the components, and it must not end the display it works on
         const leaveButtons = ['New Task'];
@@ -4908,7 +3070,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
     // cards: an intent dimension was selected, fetch the rewritten versions of every value
     const handleDimensionSelect = async (intent) => {
-        if (EXPERIMENT.cond !== 'cards' || !selectedComponentId) return;
+        if (!selectedComponentId) return;
         const unit = combinedResults.find(component => component.id === selectedComponentId);
         if (!unit) return;
         const open = cardsRef.current;
@@ -4947,7 +3109,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     const dimensionSelectRef = useRef(handleDimensionSelect);
     dimensionSelectRef.current = handleDimensionSelect;
     useEffect(() => {
-        if (EXPERIMENT.cond !== 'cards' || !selectedComponentId) return;
+        if (!selectedComponentId) return;
         const unit = combinedResultsRef.current.find(component => component.id === selectedComponentId);
         const first = unit && unit.linkedIntents && unit.linkedIntents[0];
         if (!first) return;
@@ -5122,9 +3284,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 rejected[unit.id] = `check: ${problem}`;
                 return;
             }
-            const latestUnit = combinedResultsRef.current.find(u => u.id === unit.id) || unit;
-            const linkedIntents = (latestUnit.linkedIntents || []).map(i => i.dimension === intentSelected.dimension
-                ? { ...i, current_value: intentSelected.current_value, other_values: intentSelected.other_values } : i);
             if (cursor && cursor.index === index) {
                 if (span.end <= cursor.offset) {
                     cursor.offset += newContent.length - (span.end - span.start);
@@ -5140,9 +3299,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     children: [{
                         text: getNodeText(null, node).slice(0, span.start) + newContent + getNodeText(null, node).slice(span.end),
                         componentId: keep ? keep.componentId : unit.id,
-                        ...(keep ? { highlight: true } : {}),
-                        hasDimensions: linkedIntents.length > 0,
-                        linkedIntents
+                        ...(keep ? { highlight: true } : {})
                     }]
                 };
             });
@@ -5399,147 +3556,10 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         if (shown === 'empty') restore('rewrite');
     };
 
-    // Add state update logic and debugging logs to handleRadioChange
-    const handleRadioChange = async (dimension, newValue) => {
-        try {
-            console.log('Radio change detected:', { dimension, newValue });
-    
-            const selectedComponent = combinedResults.find(component => component.id === selectedComponentId);
-            if (!selectedComponent) {
-                console.error('No selected component found');
-                return;
-            }
-
-            // Baseline logging: a preview of another dimension that was never applied counts as a leave
-            if (EXPERIMENT.cond === 'baseline' && previewSessionRef.current && previewSessionRef.current.dimension !== dimension) {
-                flushLeave();
-            }
-    
-            // Find the intent being changed
-            const targetIntent = selectedComponent.linkedIntents.find(intent => intent.dimension === dimension);
-            if (!targetIntent) {
-                console.error('Target intent not found');
-                return;
-            }
-    
-            // Construct INTENT_SELECTED with the new value as current_value
-            // and all other options (including the previous current_value) as other_values
-            const allValues = [targetIntent.current_value, ...targetIntent.other_values];
-            const otherValues = allValues.filter(value => value !== newValue);
-    
-            const intentSelected = {
-                dimension,
-                current_value: newValue,
-                other_values: otherValues
-            };
-    
-            // Construct INTENT_OTHERS from other intents of the same component
-            const intentOthers = selectedComponent.linkedIntents
-                .filter(intent => intent.dimension !== dimension)
-                .map(intent => ({
-                    dimension: intent.dimension,
-                    current_value: intent.current_value
-                }));
-    
-            console.log('INTENT_SELECTED:', intentSelected);
-            console.log('INTENT_OTHERS:', intentOthers);
-    
-            // Update state to reflect the new selection
-            setCombinedResults(prevResults => {
-                return prevResults.map(component => {
-                    if (component.id === selectedComponentId) {
-                        return {
-                            ...component,
-                            linkedIntents: component.linkedIntents.map(intent => {
-                                if (intent.dimension === dimension) {
-                                    // Preserve the original order by swapping values instead of reordering
-                                    const newOtherValues = [...intent.other_values];
-                                    const oldCurrentValue = intent.current_value;
-                                    
-                                    // Find the index of the new value in other_values
-                                    const newValueIndex = newOtherValues.indexOf(newValue);
-                                    
-                                    if (newValueIndex !== -1) {
-                                        // Replace the new value with the old current value
-                                        newOtherValues[newValueIndex] = oldCurrentValue;
-                                    } else {
-                                        // If new value is not in other_values, add old current value to the end
-                                        newOtherValues.push(oldCurrentValue);
-                                    }
-                                    
-                                    return {
-                                        ...intent,
-                                        current_value: newValue,
-                                        other_values: newOtherValues
-                                    };
-                                }
-                                return intent;
-                            })
-                        };
-                    }
-                    return component;
-                });
-            });
-    
-            // Call the API with the correct data structure
-            const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
-                userName: globalUsername,
-                taskId: globalTaskId,
-                userTask,
-        
-                draftLatest: originalText,
-                componentCurrent: selectedComponent.content,
-                intentSelected,
-                intentOthers
-            });
-    
-            if (response.data && response.data.component_variations) {
-                console.log('Component variations received:', response.data.component_variations);
-                // Find the content that matches the selected intent value
-                const matchingVariation = response.data.component_variations.find(
-                    variation => variation.intent_value === newValue
-                );
-                console.log('Matching variation:', matchingVariation);
-                if (matchingVariation) {
-                    setPreviewContent(matchingVariation.content);
-                    if (EXPERIMENT.cond === 'baseline') {
-                        const now = Date.now();
-                        const session = previewSessionRef.current;
-                        if (!session || session.unitId !== selectedComponentId || session.dimension !== dimension) {
-                            previewSessionRef.current = {
-                                unitId: selectedComponentId,
-                                unitTitle: selectedComponent.title || null,
-                                dimension,
-                                firstPreviewAt: now,
-                                shownValues: [],
-                                lastValue: null
-                            };
-                        }
-                        const activeSession = previewSessionRef.current;
-                        activeSession.lastValue = newValue;
-                        if (!activeSession.shownValues.includes(newValue)) {
-                            activeSession.shownValues.push(newValue);
-                        }
-                        logEvent({
-                            unit_id: selectedComponentId,
-                            unit_title: activeSession.unitTitle,
-                            intent_dimension: dimension,
-                            event: 'preview_shown',
-                            shown_values: [newValue]
-                        });
-                    }
-                }
-                // Handle the response as needed
-            }
-        } catch (error) {
-            console.error('Error calling /intent-change-rewriter:', error);
-            message.error('Failed to process intent change');
-        }
-    };
 
     // Handle keyboard shortcuts
     const handleKeyDown = (event) => {
-        if (EXPERIMENT.cond === 'cards' && editor.selection && Range.isCollapsed(editor.selection)) {
+        if (editor.selection && Range.isCollapsed(editor.selection)) {
             const layout = sectionLayout();
             const anchor = editor.selection.anchor;
             if (layout && layout.subjectIndex === anchor.path[0] && anchor.path.length === 2) {
@@ -5640,21 +3660,11 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
             console.log('Combined Result:', combinedResult);
             setCombinedResults(combinedResult); // Store in state
-            if (EXPERIMENT.cond === 'cards') {
-                // Both are ready: the component list and the intents appear together
-                setComponents(commonComponents);
-                message.success(`Extracted ${commonComponents.length} components`);
-            }
+            // Both are ready: the component list and the intents appear together
+            setComponents(commonComponents);
+            message.success(`Extracted ${commonComponents.length} components`);
              // 初始化所有dimension标记
-            if (EXPERIMENT.cond === 'cards') {
-                if (combinedResult.length > 0) initializeAllDimensionsWithResults(combinedResult);
-            } else {
-                setTimeout(() => {
-                    if (combinedResult.length > 0) {
-                        initializeAllDimensionsWithResults(combinedResult);
-                    }
-                }, 100);
-            }
+            if (combinedResult.length > 0) initializeAllDimensionsWithResults(combinedResult);
             return true;
         } catch (error) {
             console.error('Error processing combined result:', error);
@@ -5670,15 +3680,11 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         }
 
         // The latest editor content (this may run from a render older than the draft it marks)
-        let newValue = [...(EXPERIMENT.cond === 'cards' ? valueRef.current : value)];
+        let newValue = [...(valueRef.current)];
         
         // 为每个component添加dimension标记
         results.forEach(component => {
-            if (EXPERIMENT.cond === 'cards') {
-                newValue = markUnitInValue(newValue, component.content, component.id, component.linkedIntents || []);
-            } else if (component.linkedIntents && component.linkedIntents.length > 0) {
-                newValue = addDimensionsToValue(newValue, component.content, component.id, component.linkedIntents);
-            }
+            newValue = markUnitInValue(newValue, component.content, component.id);
         });
         
         setValue(newValue);
@@ -5783,17 +3789,14 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         >
             <FactorPanel
                 variant="sidebar"
-                cardsLayout={EXPERIMENT.cond === 'cards'}
-                topSlot={EXPERIMENT.cond === 'cards' ? (
-                    <PlaceholderTable
+                topSlot={<PlaceholderTable
                         rows={draftGenerating ? [] : placeholders.map(field => ({ key: field.key, placeholder: `[${field.label}]`, value: placeholderValues[field.key] || '' }))}
                         generating={draftGenerating}
                         onChange={handlePlaceholderChange}
                         onDelete={deletePlaceholder}
                         onClearAll={clearAllPlaceholders}
                         canClear={!draftGenerating && Object.values(placeholderValues).some(text => text)}
-                    />
-                ) : null}
+                    />}
                 selection={factorSelection}
                 userTask={userTask}
                 hasDraft={hasDraft}
@@ -5825,30 +3828,12 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 height: 'calc(100vh - 64px)',
                 overflowY: 'auto',
                 padding: '24px',
-                background: EXPERIMENT.cond === 'cards' ? '#fff' : undefined,
+                background: '#fff',
             }}
         >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0, ...(EXPERIMENT.cond === 'cards' ? { height: '40px' } : {}) }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0, ...({ height: '40px' }) }}>
                 <div style={{ fontSize: '24px', fontWeight: 'bold' }}>Email Draft Editor</div>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                    {EXPERIMENT.cond !== 'cards' && (
-                    <Button
-                        ref={generateButtonRef}
-                        onClick={() => {
-                            if (showGuide) markGuideSeen();
-                            handleExtractComponents();
-                        }}
-                        loading={loading}
-                        disabled={!hasDraft}
-                    >
-                        Generate Components
-                    </Button>
-                    )}
-                    {EXPERIMENT.cond !== 'cards' && (
-                    <Button onClick={safeResetEditor} danger>
-                        Reset Editor
-                    </Button>
-                    )}
                 </div>
             </div>
             
@@ -5866,9 +3851,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 mask={{ color: 'rgba(0, 0, 0, 0.25)' }}
                 steps={[{
                     target: () => generateButtonRef.current,
-                    description: EXPERIMENT.cond === 'cards'
-                        ? 'After editing the email, click Regenerate to refresh the components.'
-                        : 'Click to split your email into parts and see the writing choices behind each part.',
+                    description: 'After editing the email, click Regenerate to refresh the components.',
                     placement: 'bottomRight',
                     closeIcon: false,
                     nextButtonProps: { children: 'Got it' }
@@ -5894,8 +3877,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 {contentLoaded ? (
                     <>
                     {/* cards: while the email and its components are made, the page shows nothing else (the old page stays hidden, not unmounted) */}
-                    {EXPERIMENT.cond === 'cards' && draftGenerating && renderGeneratingSkeleton()}
-                    <div style={EXPERIMENT.cond === 'cards' && draftGenerating ? { display: 'none' } : undefined}>
+                    {draftGenerating && renderGeneratingSkeleton()}
+                    <div style={draftGenerating ? { display: 'none' } : undefined}>
                     <Row style={{ 
                         borderBottom: '1px solid #d9d9d9',
                         height: '500px',
@@ -5953,63 +3936,38 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                         }
                                     }}
                                 >
-                                    {(EXPERIMENT.cond !== 'cards' || !value.some(node => getNodeText(null, node).trim())) && <Toolbar />}
+                                    {(!value.some(node => getNodeText(null, node).trim())) && <Toolbar />}
                                     <EditorFrame {...frameProps}>
-                                    {EXPERIMENT.cond === 'cards' && <div className='card-bg' />}
-                                    {EXPERIMENT.cond === 'cards' && <OverlayScrollbar scrollerRef={editorScrollRef} />}
+                                    {<div className='card-bg' />}
+                                    {<OverlayScrollbar scrollerRef={editorScrollRef} />}
                                     <div style={{ 
                                         flex: 1, 
                                         minHeight: 0,
                                         overflow: 'auto',
                                         position: 'relative'
                                     }}
-                                    className={EXPERIMENT.cond === 'cards' ? 'email-scroll' : undefined}
+                                    className={'email-scroll'}
                                     ref={editorScrollRef}
                                     onMouseUp={evaluateSelectionForRewrite}
                                     onKeyUp={handleSelectionKeyUp}
                                     onMouseMove={handleUnitMouseMove}
-                                    onMouseLeave={() => { if (EXPERIMENT.cond === 'cards') setUnitHover(null); }}
+                                    onMouseLeave={() => { setUnitHover(null); }}
                                     >
-                                        {EXPERIMENT.cond === 'cards' && (
-                                            <style>{`
+                                        {<style>{`
                                                 .unit-leaf.unit-hover:not(.unit-selected) { background-color: #fff8e1; border-radius: 4px; }
                                                 .subject-row p { margin: 0; }
                                                 /* the white card with its border, drawn behind the scroller from the subject line down */
                                                 .card-bg { position: absolute; left: 16px; right: 16px; bottom: 20px; top: calc(16px + var(--card-top, 0px));
                                                     border-radius: ${BOX_RADIUS}px; background: #fff; box-sizing: border-box; pointer-events: none; }
                                                 .card-frame[data-card="0"] .card-bg { display: none; }
-                                            `}</style>
-                                        )}
-                                        {draftGenerating && EXPERIMENT.cond !== 'cards' && (
-                                            <div className='draft-generating' role='status' aria-live='polite'>
-                                                <style>{`
-                                                    .draft-generating { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center;
-                                                        justify-content: center; gap: 14px; background: rgba(255, 255, 255, 0.85); color: #1677ff;
-                                                        font-size: 18px; font-weight: 600; }
-                                                    .draft-generating .dot { width: 12px; height: 12px; border-radius: 50%; background: #1677ff;
-                                                        display: inline-block; animation: draft-bounce 1s infinite ease-in-out; }
-                                                    .draft-generating .dot:nth-child(2) { animation-delay: 0.15s; }
-                                                    .draft-generating .dot:nth-child(3) { animation-delay: 0.3s; }
-                                                    @keyframes draft-bounce {
-                                                        0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
-                                                        40% { transform: translateY(-12px); opacity: 1; }
-                                                    }
-                                                `}</style>
-                                                <span style={{ display: 'inline-flex', gap: '8px', alignItems: 'flex-end', height: '24px' }}>
-                                                    <span className='dot' />
-                                                    <span className='dot' />
-                                                    <span className='dot' />
-                                                </span>
-                                                <span>Generating email…</span>
-                                            </div>
-                                        )}
+                                            `}</style>}
                                         <Editable
                                             renderElement={renderElement}
                                             renderLeaf={renderLeaf}
-                                            decorate={EXPERIMENT.cond === 'cards' ? decorateSubjectPrefix : undefined}
+                                            decorate={decorateSubjectPrefix}
                                             onKeyDown={handleKeyDown}
                                             placeholder={loading ? 'Loading...' : draftGenerating ? '' : hasDraft ? 'Start typing...' : 'Select your options in the left sidebar, then click "Generate Email Draft".'}
-                                            style={EXPERIMENT.cond === 'cards' ? {
+                                            style={{
                                                 // the last paragraph's box grows to the bottom (the frame around the scroller leaves 20px below it, the same
                                                 // as between the subject line and the box)
                                                 padding: 0,
@@ -6019,17 +3977,12 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                                 flexDirection: 'column',
                                                 outline: 'none',
                                                 lineHeight: '2.0',
-                                            } : {
-                                                padding: '16px',
-                                                minHeight: '400px',
-                                                outline: 'none',
-                                                lineHeight: '2.0',
                                             }}
                                             onError={(error) => {
                                                 console.error('Slate editor error:', error);
                                             }}
                                         />
-                                        {EXPERIMENT.cond === 'cards' && rewriteBox && (
+                                        {rewriteBox && (
                                             <SelectionRewriteBox
                                                 ref={rewriteBoxElementRef}
                                                 top={rewriteBox.top}
@@ -6074,29 +4027,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                 )}
 
                                 {/* Floating Toolbar */}
-                                {floatingToolbar.visible && EXPERIMENT.cond !== 'cards' && (
-                                    <FloatingToolbar
-                                        component={floatingToolbar.component}
-                                        onReplace={handleComponentReplace}
-                                        onClose={closeFloatingToolbar}
-                                        position={floatingToolbar.position}
-                                        value={value}
-                                        setValue={setValue}
-                                        setEditorKey={setEditorKey}
-                                        combinedResults={combinedResults}
-                                        setCombinedResults={setCombinedResults}
-                                        setComponents={setComponents}
-                                        originalText={originalText}
-                                        setOriginalText={setOriginalText}
-                                        components={components}
-                                        globalTaskId={globalTaskId}
-                                        globalUsername={globalUsername}
-                                        userTask={userTask}
-                                        getNodeText={getNodeText}
-                                        setLastModifiedComponent={setLastModifiedComponent}
-                                        safeEditorOperation={safeEditorOperation}
-                                    />
-                                )}
                             </div>
                         </Col>
                         
@@ -6122,8 +4052,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                     gap: '8px'
                                 }}>
                                     <span>Email Components ({components.length})</span>
-                                    {EXPERIMENT.cond === 'cards' && (
-                                        <Button
+                                    {<Button
                                             ref={generateButtonRef}
                                             data-leave-cards="true"
                                             size="small"
@@ -6135,8 +4064,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                             disabled={!hasDraft || draftGenerating}
                                         >
                                             Regenerate
-                                        </Button>
-                                    )}
+                                        </Button>}
                                 </div>
                                 
                                 <div style={{
@@ -6152,7 +4080,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                             marginTop: '20px',
                                             fontSize: '13px'
                                         }}>
-                                            {EXPERIMENT.cond === 'cards' ? 'The components appear together with the email.' : 'Click "Generate Components" to analyze email structure'}
+                                            {'The components appear together with the email.'}
                                         </div>
                                     ) : (
                                         components.map((component, index) => (
@@ -6162,9 +4090,9 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                                     marginBottom: '8px',
                                                     cursor: 'pointer',
                                                     padding: '12px',
-                                                    backgroundColor: selectedComponentId === component.id ? (EXPERIMENT.cond === 'cards' ? '#eaf1fd' : '#e6f7ff') : 'white',
-                                                    border: selectedComponentId === component.id ? `1px solid ${EXPERIMENT.cond === 'cards' ? '#2f6fde' : '#1890ff'}` : '1px solid #e8e8e8',
-                                                    borderLeft: selectedComponentId === component.id ? `4px solid ${EXPERIMENT.cond === 'cards' ? '#2f6fde' : '#1890ff'}` : '1px solid #e8e8e8',
+                                                    backgroundColor: selectedComponentId === component.id ? ('#eaf1fd') : 'white',
+                                                    border: selectedComponentId === component.id ? `1px solid ${'#2f6fde'}` : '1px solid #e8e8e8',
+                                                    borderLeft: selectedComponentId === component.id ? `4px solid ${'#2f6fde'}` : '1px solid #e8e8e8',
                                                     borderRadius: '4px',
                                                     transition: 'all 0.2s',
                                                 }}
@@ -6191,7 +4119,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                                     <div style={{ 
                                                         fontSize: '12px',
                                                         fontWeight: 'bold',
-                                                        color: selectedComponentId === component.id ? (EXPERIMENT.cond === 'cards' ? '#2f6fde' : '#1890ff') : '#333',
+                                                        color: selectedComponentId === component.id ? ('#2f6fde') : '#333',
                                                         lineHeight: '1.3'
                                                     }}>
                                                         {component.title}
@@ -6228,129 +4156,12 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                             flexShrink: 0
                         }}>
                             <div style={{fontWeight: 'bold', fontSize: '16px', marginRight: '16px'}}>Intents</div> 
-                            {EXPERIMENT.cond !== 'cards' && (
-                            <Button 
-                                size="small" 
-                                color="primary" 
-                                variant="outlined" 
-                                style={{marginRight:'16px'}}
-                                onClick={handleApplyToSelectedComponent}
-                                disabled={!selectedComponentId || !previewContent}
-                            >
-                                Apply to Selected Component
-                            </Button>
-                            )}
                         </div>
                         
                         {/* Preview section - fixed height */}
-                        {EXPERIMENT.cond !== 'cards' && (
-                        <div className='intentModificationPreview' style={{
-                            padding:'8px 16px',
-                            borderRadius:'8px',
-                            margin:'0 16px',
-                            backgroundColor:'#fafafa', 
-                            flexShrink: 0,
-                            minHeight: '60px',
-                            maxHeight: '120px',
-                            overflow: 'auto'
-                        }}>
-                            <p style={{fontWeight: '600', margin: '0 0 8px 0', fontSize: '14px'}}>Modification Preview:</p>
-                            <div className="intentModificationPreviewContent" style={{
-                                fontSize: '13px',
-                                lineHeight: '1.4',
-                                color: '#666'
-                            }}>
-                                {previewContent || 'No preview available'}
-                            </div>
-                        </div>
-                        )}
                         
                         {/* Scrollable cards section */}
-                        {EXPERIMENT.cond === 'cards' ? renderCardsIntents() : (
-                        <div className='intentCards' style={{
-                            flex: 1,
-                            overflow: 'auto',
-                            padding: '8px 16px',
-                            height: '200px'
-                        }}>
-                            <div style={{ 
-                                display: 'flex', 
-                                flexWrap: 'wrap', 
-                                gap: '12px',
-                                alignItems: 'flex-start'
-                            }}>
-                                {selectedComponentId && combinedResults.length > 0 ? (
-                                    combinedResults
-                                        .find(component => component.id === selectedComponentId)?.linkedIntents
-                                        .map((intent, i) => (
-                                            <Card 
-                                                title={
-                                                    <div style={{ 
-                                                        display: 'flex', 
-                                                        alignItems: 'center', 
-                                                        gap: '8px',
-                                                        fontSize: '14px',
-                                                        fontWeight: '600'
-                                                    }}>
-                                                        {intent.dimension}
-                                                    </div>
-                                                }
-                                                key={i}
-                                                size="small"
-                                                style={{ 
-                                                    borderTop: `4px solid ${getDimensionColor(intent.dimension)}`,
-                                                    minWidth: '220px',
-                                                    maxWidth: '280px',
-                                                    flex: '0 0 auto',
-                                                    marginBottom: '8px'
-                                                }}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                }}
-                                            >
-                                                <Radio.Group
-                                                    style={{ 
-                                                        display: 'flex', 
-                                                        flexDirection: 'column', 
-                                                        gap: '8px',
-                                                        width: '100%'
-                                                    }}
-                                                    value={intent.current_value}
-                                                    onChange={(e) => {
-                                                        e.stopPropagation();
-                                                        handleRadioChange(intent.dimension, e.target.value);
-                                                    }}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                    }}
-                                                >
-                                                    {getIntentOptions(intent).map((value, index) => (
-                                                        <Radio 
-                                                            key={index} 
-                                                            value={value}
-                                                            style={{ fontSize: '13px' }}
-                                                        >
-                                                            {value}
-                                                        </Radio>
-                                                    ))}
-                                                </Radio.Group>
-                                            </Card>
-                                        ))
-                                ) : (
-                                    <div style={{ 
-                                        color: '#999', 
-                                        fontStyle: 'italic', 
-                                        textAlign: 'center', 
-                                        width: '100%',
-                                        padding: '40px 20px',
-                                        fontSize: '14px' 
-                                    }}>
-                                        No intents available. Select a component to view its intents.
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                        )}
+                        {renderCardsIntents()}
                     </Col>
                     </Row>
                     </div>
@@ -6402,54 +4213,6 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             </Modal>
             )}
 
-            {/* Component Change Modal */}
-            <Modal
-                title="Component Modification Record"
-                open={changeModal.visible}
-                onCancel={handleModalCancel}
-                footer={[
-                    <Button key="cancel" onClick={handleModalCancel}>
-                        Cancel
-                    </Button>,
-                    <Button key="save" type="primary" onClick={handleModalSave} loading={modalSaveLoading}>
-                        Save
-                    </Button>
-                ]}
-                width={600}
-            >
-                <div style={{ marginBottom: '16px' }}>
-                    <Typography.Text strong>Old Content:</Typography.Text>
-                    <div style={{ 
-                        background: '#f5f5f5', 
-                        padding: '8px', 
-                        borderRadius: '4px', 
-                        marginTop: '4px',
-                        marginBottom: '12px'
-                    }}>
-                        {changeModal.oldContent}
-                    </div>
-                    
-                    <Typography.Text strong>New Content:</Typography.Text>
-                    <div style={{ 
-                        background: '#e6f7ff', 
-                        padding: '8px', 
-                        borderRadius: '4px', 
-                        marginTop: '4px',
-                        marginBottom: '16px'
-                    }}>
-                        {changeModal.newContent}
-                    </div>
-                    
-                    <Typography.Text strong>Modification Reason:</Typography.Text>
-                    <Input.TextArea
-                        value={modificationReason}
-                        onChange={(e) => setModificationReason(e.target.value)}
-                        placeholder="Please enter the reason for this modification..."
-                        rows={3}
-                        style={{ marginTop: '4px' }}
-                    />
-                </div>
-            </Modal>
         </div>
         </div>
     );
