@@ -2,7 +2,7 @@
 // and in the Email Editor sidebar. Both share one selection state through useFactorSelection.
 import React, { useState, useEffect } from 'react';
 import { Button, Input, Checkbox, Card, Collapse, Row, Col, Radio, Tag, Select, Modal, Popconfirm, message } from 'antd';
-import { DeleteOutlined, DownOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownOutlined, CopyOutlined, SaveOutlined, PlusOutlined, UndoOutlined } from '@ant-design/icons';
 import relationshipIcon from '../relationship.png'; // 引入图片
 import communicationIcon from '../commnuication.png'; // 引入图片
 import demongraphyIcon from '../demography.png'; // 引入图片
@@ -344,10 +344,24 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
 // Section titles of the cards sidebar: lighter than the option text below them
 export const SIDEBAR_TITLE_STYLE = { fontWeight: 400, fontSize: '14px', color: '#8a9099' };
 
-// Small buttons on the title rows of the cards sidebar (Update, Add, Reset, Clear All, Apply)
 // Space between the sidebar sections (Information to fill, Request, Template): one value so the gaps stay equal
 export const SIDEBAR_SECTION_GAP = '28px';
-export const SIDEBAR_SMALL_BUTTON_STYLE = { height: '20px', padding: '0 7px', fontSize: '12px', lineHeight: '18px', borderRadius: '5px' };
+
+// Small buttons on the title rows of the cards sidebar (Clear All, Copy, Update, Add, Reset): only the icon shows; the name slides out
+// to the right of the icon while the mouse is over the button or it has the keyboard focus. The buttons are right-aligned, so the one
+// that opens pushes the buttons on its left aside. The name stays as the accessible name (aria-label).
+export const SIDEBAR_SMALL_BUTTON_STYLE = { height: '20px', minWidth: '20px', padding: '0 5px', fontSize: '12px', lineHeight: '18px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 0, overflow: 'hidden' };
+export const HoverIconButton = ({ icon, label, onClick, disabled, title }) => (
+    <Button size="small" className="hover-icon-button" style={SIDEBAR_SMALL_BUTTON_STYLE} aria-label={label} title={title} disabled={disabled} onClick={onClick}>
+        <style>{`
+            .hover-icon-button .hib-label { max-width: 0; margin-left: 0; opacity: 0; white-space: nowrap; overflow: hidden;
+                transition: max-width 0.2s ease, margin-left 0.2s ease, opacity 0.15s ease; }
+            .hover-icon-button:hover .hib-label, .hover-icon-button:focus-visible .hib-label { max-width: 80px; margin-left: 4px; opacity: 1; }
+        `}</style>
+        {icon}
+        <span className="hib-label">{label}</span>
+    </Button>
+);
 
 // The small arrow right of a sidebar title that shows or hides the section below it
 export const SidebarToggle = ({ open, onClick, what }) => (
@@ -774,9 +788,9 @@ const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGe
                             <div style={SIDEBAR_TITLE_STYLE}>Request</div>
                             <SidebarToggle open={requestOpen} onClick={() => setRequestOpen(open => !open)} what="request" />
                         </div>
-                        <Button
-                            size="small"
-                            style={SIDEBAR_SMALL_BUTTON_STYLE}
+                        <HoverIconButton
+                            icon={<CopyOutlined />}
+                            label="Copy"
                             disabled={!userTask}
                             onClick={async () => {
                                 try {
@@ -786,9 +800,7 @@ const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGe
                                     message.error('Could not copy to the clipboard');
                                 }
                             }}
-                        >
-                            Copy
-                        </Button>
+                        />
                     </div>
                     {requestOpen && (
                         // The same white card as the table of Information to fill
@@ -805,26 +817,20 @@ const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGe
                                 <SidebarToggle open={templateOpen} onClick={() => setTemplateOpen(open => !open)} what="templates and options" />
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <Button
-                                    size="small"
-                                    style={SIDEBAR_SMALL_BUTTON_STYLE}
+                                <HoverIconButton
+                                    icon={<SaveOutlined />}
+                                    label="Update"
                                     onClick={handleUpdateTemplate}
                                     disabled={!selectedTemplate}
                                     title={selectedTemplate ? `Save the current options into "${selectedTemplate}"` : 'Select a template first'}
-                                >
-                                    Update
-                                </Button>
-                                <Button size="small" style={SIDEBAR_SMALL_BUTTON_STYLE} onClick={openAddTemplate} title="Save the current options as a new template">
-                                    Add
-                                </Button>
-                                <Button
-                                    size="small"
-                                    style={SIDEBAR_SMALL_BUTTON_STYLE}
+                                />
+                                <HoverIconButton icon={<PlusOutlined />} label="Add" onClick={openAddTemplate} title="Save the current options as a new template" />
+                                <HoverIconButton
+                                    icon={<UndoOutlined />}
+                                    label="Reset"
                                     onClick={handleResetTemplate}
                                     title={selectedTemplate ? `Restore the options of "${selectedTemplate}"` : 'Clear all options'}
-                                >
-                                    Reset
-                                </Button>
+                                />
                             </div>
                         </div>
                         {templateOpen && (

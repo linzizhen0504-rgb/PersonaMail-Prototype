@@ -45,3 +45,4 @@ Return your response as a JSON object with component variations:
 - Ensure all variations read fluently when integrated into the complete email, do not overlap or repeat with its context
 - Preserve the email's core purpose while adapting the tone/approach per intent
 - Keep component length appropriate for email context
+- If the current component contains a square-bracketed instruction or list of options about a **reason** or a **next step / progress** (for example `[briefly state your reason, e.g., an illness / a heavy workload]` or `[mention progress, e.g., the initial research]`), every version must replace the whole bracket with concrete, fluent wording that fits that version's intent value. Never keep square brackets for such content. Brackets that stand for plain facts the sender fills in later (a name, a date, a course) stay in brackets exactly as they are.

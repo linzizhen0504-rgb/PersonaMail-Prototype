@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
-import { withHistory } from 'slate-history';
+import { withHistory, HistoryEditor } from 'slate-history';
 import { Card, Typography, message, Button, Row, Col, Tooltip, Tag, Radio, Checkbox, Flex, Modal, Input, Spin, Tour } from 'antd';
 import axios from 'axios';
 import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons';
@@ -10,7 +10,7 @@ import stylebookSVG from '../stylebook.svg';
 import FactorPanel, { useFactorSelection } from './FactorPanel';
 import SelectionRewriteBox, { CARD_BORDER_RADIUS } from './SelectionRewriteBox';
 import PlaceholderTable from './PlaceholderTable';
-import { findPlaceholderFields, fillPlaceholders, knownPlaceholderKeys } from './placeholders';
+import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholderFields, containsPlaceholder, removePlaceholder } from './placeholders';
 import { RobotIcon, UserAvatarIcon, BotAvatarIcon } from '../icons';
 
 const { Title } = Typography;
@@ -165,6 +165,16 @@ const isBlockActive = (editor, format) => {
         return false;
     }
 };
+
+// The leaves of a paragraph for the pieces of a text that has values filled in (see segmentFill); a filled piece carries its field
+// The marks on the text of a filled-in field: its key and label, and the bracket it replaced (to put it back)
+const placeholderMarks = (field) => ({
+    placeholderKey: field.key,
+    placeholderLabel: field.label,
+    ...(field.raw ? { placeholderRaw: field.raw } : {})
+});
+const leavesFromSegments = (segments) => (segments.length === 0 ? [{ text: '' }]
+    : segments.map(segment => (segment.field ? { text: segment.text, ...placeholderMarks(segment.field) } : { text: segment.text })));
 
 // Find a unit's text inside a paragraph: exact match first, then tolerant of whitespace and quote-style differences.
 // Returns {start, end} or null.
@@ -429,6 +439,12 @@ const EmailEditor = () => {
     // The editor is remounted with new content whenever the program replaces text (a new draft, a version card, an AI rewrite,
     // filled-in information). Operations recorded before that no longer fit the document, so the undo history starts again.
     useEffect(() => {
+        // cards: the text a table filled in was marked; a remount that rebuilds paragraphs from text drops the marks, so they are put
+        // back on the same text (not after a new draft, which starts without any)
+        if (EXPERIMENT.cond === 'cards') {
+            if (skipCarryRef.current) skipCarryRef.current = false;
+            else carryMarksRef.current(lastValueRef.current);
+        }
         if (editor.history) editor.history = { undos: [], redos: [] };
         // cards: a click that selected a unit remounted the editor: the caret goes back to the character that was clicked
         const pending = pendingCaretRef.current;
@@ -470,13 +486,27 @@ const EmailEditor = () => {
     const hoveredUnitRef = useRef(null);
     const pendingCaretRef = useRef(null);
     const useInProgressRef = useRef(false);
+    // cards: live filling of the placeholders from the sidebar table
+    const placeholderKnownRef = useRef(new Set()); // keys that were single-field brackets (needed to split [A/B] after they are filled)
+    const placeholderPendingRef = useRef(new Set()); // fields whose typed value has not been written into the email yet
+    const placeholderTimersRef = useRef({});
+    const liveFillRef = useRef({ key: null, time: 0, undos: 0 });
+    const placeholdersRef = useRef([]);
+    const skipCarryRef = useRef(false);
+    const carryMarksRef = useRef(() => {});
+    const lastValueRef = useRef(null);
     const closeRewriteBoxRef = useRef(() => {});
     const editorScrollRef = useRef(null);
     // cards: the fields the draft still asks for ([{ key, label }], each piece of information once even when it occurs in
     // several [brackets]), and the values typed for them in the sidebar table, by key
     const [placeholderValues, setPlaceholderValues] = useState({});
     const draftTextForPlaceholders = useMemo(() => (value || []).map(node => getNodeText(null, node)).join('\n'), [value]);
-    const placeholders = useMemo(() => findPlaceholderFields(draftTextForPlaceholders), [draftTextForPlaceholders]);
+    // The brackets still in the email, and the fields that were filled in from the table (their text is marked)
+    const placeholders = useMemo(() => collectPlaceholderFields(value, placeholderKnownRef.current), [value]);
+    placeholdersRef.current = placeholders;
+    useEffect(() => {
+        knownPlaceholderKeys(draftTextForPlaceholders).forEach(key => placeholderKnownRef.current.add(key));
+    }, [draftTextForPlaceholders]);
     // A field that was edited away by hand leaves the table together with the value typed for it
     useEffect(() => {
         setPlaceholderValues(prev => {
@@ -488,6 +518,29 @@ const EmailEditor = () => {
             return next;
         });
     }, [placeholders]);
+    // Text that was filled in from the table and then changed in the email: the input follows the email
+    useEffect(() => {
+        if (EXPERIMENT.cond !== 'cards') return;
+        const filled = new Map();
+        const walk = (list) => (list || []).forEach(node => {
+            if (node && typeof node.text === 'string') {
+                if (node.placeholderKey && node.text && !filled.has(node.placeholderKey)) filled.set(node.placeholderKey, node.text);
+            } else if (node && Array.isArray(node.children)) {
+                walk(node.children);
+            }
+        });
+        walk(value);
+        setPlaceholderValues(prev => {
+            let next = null;
+            filled.forEach((text, key) => {
+                if (placeholderPendingRef.current.has(key)) return;
+                if ((prev[key] || '').trim() !== text) { next = next || { ...prev }; next[key] = text; }
+            });
+            return next || prev;
+        });
+    }, [value]);
+    // Read by the remount effect above before it is updated for this render
+    useEffect(() => { lastValueRef.current = value; }, [value]);
     const [originalText, setOriginalText] = useState('');
     // Add this state near other useState declarations
     const [combinedResults, setCombinedResults] = useState([]);
@@ -573,11 +626,16 @@ const EmailEditor = () => {
         const fills = new Map(Object.entries(placeholderValues)
             .filter(([, typed]) => (typed || '').trim())
             .map(([key, typed]) => [key, typed.trim()]));
+        const known = knownPlaceholderKeys(draft);
         if (EXPERIMENT.cond === 'cards' && fills.size > 0) {
-            text = fillPlaceholders(draft, fills, knownPlaceholderKeys(draft));
+            text = fillPlaceholders(draft, fills, known);
+        }
+        if (EXPERIMENT.cond === 'cards') {
+            placeholderKnownRef.current = new Set(known); // a new draft: nothing carries over from the old one
+            skipCarryRef.current = true;
         }
         startNewStyleSession();
-        applyDraftText(text);
+        applyDraftText(text, EXPERIMENT.cond === 'cards' && fills.size > 0 ? { template: draft, fills, known } : null);
         if (text !== draft) {
             // The server saved the draft with the brackets; the draft file follows the editor
             await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: text })
@@ -669,16 +727,20 @@ const EmailEditor = () => {
     
 
     // Replace the whole editor content with a new draft text
-    const applyDraftText = (newContent) => {
+    // fillOptions ({ template, fills, known }): the text of the paragraphs is the template (with its brackets) and the values are put
+    // in as marked text, so the table can keep changing them
+    const applyDraftText = (newContent, fillOptions) => {
         setOriginalText(newContent);
 
         // Parse content into Slate format
-        const slateContent = newContent
+        const slateContent = (fillOptions ? fillOptions.template : newContent)
             .split('\n\n')
             .filter(paragraph => paragraph.trim())
             .map((paragraph) => ({
                 type: 'paragraph',
-                children: [{ text: paragraph.trim() }],
+                children: fillOptions
+                    ? leavesFromSegments(segmentFill(paragraph.trim(), fillOptions.fills, fillOptions.known))
+                    : [{ text: paragraph.trim() }],
             }));
 
         if (slateContent.length === 0) {
@@ -701,6 +763,216 @@ const EmailEditor = () => {
         setPlaceholderValues({});
         setHasDraft(Boolean(newContent.trim()));
     };
+
+    // ---- cards: the placeholders are filled in live from the sidebar table -------------------------------------------------------
+    // The text of a unit as it is in the editor: its leaves, the paragraphs joined by a blank line
+    const unitTextFromChildren = (children, unitId) => {
+        const parts = [];
+        let marked = false;
+        children.forEach(node => {
+            if (!node || !Array.isArray(node.children)) return;
+            const leaves = node.children.filter(child => child && child.componentId === unitId);
+            if (leaves.some(leaf => leaf.placeholderKey)) marked = true;
+            const text = leaves.map(leaf => leaf.text || '').join('');
+            if (text) parts.push(text);
+        });
+        return { text: parts.join('\n\n'), marked };
+    };
+    // The text of the units, the draft text and the draft file follow the editor after placeholders in it changed (ids: the units
+    // that changed; null: look at every unit that has a placeholder, as after an undo)
+    const syncUnitContents = (ids) => {
+        const children = editor.children;
+        const updates = new Map();
+        componentsRef.current.forEach(component => {
+            if (ids && !ids.has(component.id)) return;
+            const { text, marked } = unitTextFromChildren(children, component.id);
+            if (!text || text === component.content) return;
+            if (!ids && !marked && !containsPlaceholder(text) && !containsPlaceholder(component.content)) return;
+            updates.set(component.id, text);
+        });
+        if (updates.size > 0) {
+            setComponents(prev => prev.map(component => (updates.has(component.id) ? { ...component, content: updates.get(component.id) } : component)));
+            setCombinedResults(prev => prev.map(unit => (updates.has(unit.id) ? { ...unit, content: updates.get(unit.id) } : unit)));
+        }
+        const draft = children.map(node => getNodeText(null, node)).filter(text => text.trim()).join('\n\n');
+        setOriginalText(draft);
+        axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: draft })
+            .catch(error => console.error('Error saving draft to sessionData:', error));
+    };
+    // Write the value typed for one field into the email: the brackets of the field become the value, text that was filled in
+    // before is changed, and an empty value puts the brackets back. Works on the open editor (no remount), so the selected unit,
+    // the caret and the scroll position stay.
+    const applyPlaceholderLive = (key, rawText) => {
+        const field = placeholdersRef.current.find(item => item.key === key);
+        if (!field) return;
+        const label = field.label;
+        const newValue = (rawText || '').trim();
+        const values = new Map(newValue ? [[key, newValue]] : []);
+        const allText = editor.children.map(node => getNodeText(null, node)).join('\n');
+        const known = new Set([...placeholderKnownRef.current, ...knownPlaceholderKeys(allText)]);
+        const affected = new Set();
+        let changed = false;
+        const run = () => Editor.withoutNormalizing(editor, () => {
+            const entries = Array.from(Editor.nodes(editor, { at: [], match: node => Text.isText(node) })).reverse(); // last first: the paths before stay valid
+            entries.forEach(([leaf, path]) => {
+                const { text, placeholderKey: leafKey, placeholderLabel, placeholderRaw, ...rest } = leaf;
+                let segments;
+                if (leafKey === key) {
+                    if (text === newValue) return;
+                    // an empty value puts the bracket back as it was
+                    segments = [newValue ? { text: newValue, field: { key, label, raw: placeholderRaw } } : { text: placeholderRaw || `[${label}]` }];
+                } else if (leafKey) {
+                    return;
+                } else {
+                    if (!newValue) return;
+                    segments = segmentFill(text, values, known);
+                    if (segments.length === 1 && !segments[0].field) return;
+                }
+                const nodes = segments.map(segment => (segment.field
+                    ? { ...rest, text: segment.text, ...placeholderMarks(segment.field) }
+                    : { ...rest, text: segment.text }));
+                Transforms.removeNodes(editor, { at: path });
+                Transforms.insertNodes(editor, nodes, { at: path });
+                if (leaf.componentId) affected.add(leaf.componentId);
+                changed = true;
+            });
+        });
+        // Consecutive typing in the same field is one step for Cmd+Z
+        const history = editor.history;
+        const merge = !!history && liveFillRef.current.key === key && Date.now() - liveFillRef.current.time < 3000 && liveFillRef.current.undos === history.undos.length;
+        if (merge) HistoryEditor.withMerging(editor, run);
+        else run();
+        liveFillRef.current = { key, time: Date.now(), undos: editor.history ? editor.history.undos.length : 0 };
+        if (!changed) return;
+        syncUnitContents(affected);
+        if (newValue) logEvent({ event: 'placeholders_applied', placeholders: [label], count: 1, source: 'table' });
+    };
+    const handlePlaceholderChange = (key, text) => {
+        setPlaceholderValues(prev => ({ ...prev, [key]: text }));
+        placeholderPendingRef.current.add(key);
+        clearTimeout(placeholderTimersRef.current[key]);
+        placeholderTimersRef.current[key] = setTimeout(() => {
+            applyPlaceholderLive(key, text);
+            placeholderPendingRef.current.delete(key);
+        }, 300);
+    };
+    // The delete icon of a row: the field is taken out of the email (every place it occurs), with the value that was filled in. One step
+    // for Cmd+Z. A paragraph that held nothing else goes too.
+    const deletePlaceholder = (key) => {
+        const field = placeholdersRef.current.find(item => item.key === key);
+        if (!field) return;
+        clearTimeout(placeholderTimersRef.current[key]);
+        placeholderPendingRef.current.delete(key);
+        const allText = editor.children.map(node => getNodeText(null, node)).join('\n');
+        const known = new Set([...placeholderKnownRef.current, ...knownPlaceholderKeys(allText)]);
+        const propsOf = (leaf) => { const { text, placeholderKey: markKey, placeholderLabel, placeholderRaw, ...rest } = leaf; return rest; };
+        const affected = new Set();
+        let changed = false;
+        Editor.withoutNormalizing(editor, () => {
+            for (let index = editor.children.length - 1; index >= 0; index--) { // last paragraph first: the paths before stay valid
+                const block = editor.children[index];
+                if (!block || !Array.isArray(block.children) || !block.children.every(child => typeof child.text === 'string')) continue;
+                const touched = block.children.some(leaf => leaf.placeholderKey === key || (!leaf.placeholderKey && removePlaceholder(leaf.text, key, known) !== leaf.text));
+                if (!touched) continue;
+                // Filled-in text of the field counts as its bracket again; neighbouring leaves with the same properties are one run
+                const runs = [];
+                block.children.forEach(leaf => {
+                    const text = leaf.placeholderKey === key ? (leaf.placeholderRaw || `[${field.label}]`) : leaf.text;
+                    const props = leaf.placeholderKey && leaf.placeholderKey !== key ? leaf : propsOf(leaf);
+                    const previous = runs[runs.length - 1];
+                    const mergeable = previous && (!leaf.placeholderKey || leaf.placeholderKey === key) && !previous.keep && JSON.stringify(previous.props) === JSON.stringify(props);
+                    if (mergeable) previous.text += text;
+                    else runs.push({ text, props, keep: !!leaf.placeholderKey && leaf.placeholderKey !== key });
+                    if (leaf.componentId) affected.add(leaf.componentId);
+                });
+                const children = runs
+                    .map(run => ({ ...run.props, text: run.keep ? run.text : removePlaceholder(run.text, key, known) }))
+                    .filter(leaf => leaf.text !== '');
+                Transforms.removeNodes(editor, { at: [index] });
+                if (children.length > 0 && children.some(leaf => leaf.text.trim())) Transforms.insertNodes(editor, { ...block, children }, { at: [index] });
+                else if (editor.children.length === 0) Transforms.insertNodes(editor, { ...block, children: [{ text: '' }] }, { at: [index] });
+                changed = true;
+            }
+        });
+        liveFillRef.current = { key: null, time: 0, undos: 0 };
+        setPlaceholderValues(prev => { const next = { ...prev }; delete next[key]; return next; });
+        if (!changed) return;
+        syncUnitContents(affected);
+        logEvent({ event: 'placeholder_deleted', placeholders: [field.label], count: 1 });
+    };
+    // Clear All: the inputs are emptied and the brackets come back in the email
+    const clearAllPlaceholders = () => {
+        Object.values(placeholderTimersRef.current).forEach(timer => clearTimeout(timer));
+        placeholderTimersRef.current = {};
+        placeholderPendingRef.current.clear();
+        Object.keys(placeholderValues).forEach(key => applyPlaceholderLive(key, ''));
+        setPlaceholderValues({});
+    };
+    // After a remount that rebuilt paragraphs from text the marks of filled-in text are put back on the same words
+    const carryPlaceholderMarks = (oldValue) => {
+        const wanted = [];
+        (oldValue || []).forEach((node, blockIndex) => {
+            if (!node || !Array.isArray(node.children)) return;
+            node.children.forEach(child => {
+                if (child && child.placeholderKey && child.text) {
+                    wanted.push({ key: child.placeholderKey, label: child.placeholderLabel, raw: child.placeholderRaw, text: child.text, blockIndex });
+                }
+            });
+        });
+        if (wanted.length === 0) return;
+        const present = new Map();
+        editor.children.forEach(node => {
+            if (!node || !Array.isArray(node.children)) return;
+            node.children.forEach(child => { if (child && child.placeholderKey) present.set(child.placeholderKey, (present.get(child.placeholderKey) || 0) + 1); });
+        });
+        const isWordChar = (character) => !!character && /[\p{L}\p{N}]/u.test(character);
+        const toPoint = (block, blockIndex, offset, isEnd) => {
+            let remaining = offset;
+            for (let i = 0; i < block.children.length; i++) {
+                const length = (block.children[i].text || '').length;
+                if (remaining < length || (isEnd && remaining === length) || i === block.children.length - 1) return { path: [blockIndex, i], offset: Math.min(remaining, length) };
+                remaining -= length;
+            }
+            return null;
+        };
+        const find = (text, preferred) => {
+            const order = editor.children.map((_, index) => index).sort((a, b) => (a === preferred ? -1 : b === preferred ? 1 : 0));
+            for (const blockIndex of order) {
+                const block = editor.children[blockIndex];
+                if (!block || !Array.isArray(block.children) || !block.children.every(child => typeof child.text === 'string')) continue;
+                const full = block.children.map(child => child.text).join('');
+                let from = full.indexOf(text);
+                while (from !== -1) {
+                    const to = from + text.length;
+                    const wordBefore = isWordChar(full[from - 1]) && isWordChar(text[0]);
+                    const wordAfter = isWordChar(full[to]) && isWordChar(text[text.length - 1]);
+                    let offset = 0;
+                    let overlapsMarked = false;
+                    for (const child of block.children) {
+                        const start = offset;
+                        offset += child.text.length;
+                        if (child.placeholderKey && start < to && offset > from) overlapsMarked = true;
+                    }
+                    if (!wordBefore && !wordAfter && !overlapsMarked) {
+                        const anchor = toPoint(block, blockIndex, from, false);
+                        const focus = toPoint(block, blockIndex, to, true);
+                        if (anchor && focus) return { anchor, focus };
+                    }
+                    from = full.indexOf(text, from + 1);
+                }
+            }
+            return null;
+        };
+        const seen = new Map();
+        wanted.forEach(span => {
+            const index = seen.get(span.key) || 0;
+            seen.set(span.key, index + 1);
+            if (index < (present.get(span.key) || 0)) return; // already marked in the new content
+            const range = find(span.text, span.blockIndex);
+            if (range) Transforms.setNodes(editor, placeholderMarks({ key: span.key, label: span.label, raw: span.raw }), { at: range, match: node => Text.isText(node), split: true });
+        });
+    };
+    carryMarksRef.current = carryPlaceholderMarks;
 
     // Current plain text of the editor, including unsaved manual edits
     const getCurrentDraftText = () => {
@@ -4112,6 +4384,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         if (slateHistory && (redo ? slateHistory.redos.length : slateHistory.undos.length)) {
             if (redo) editor.redo();
             else editor.undo();
+            if (EXPERIMENT.cond === 'cards') syncUnitContents(null); // a filled-in placeholder may have come back or gone
             return true;
         }
         const history = aiHistoryRef.current;
@@ -5515,8 +5788,9 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     <PlaceholderTable
                         rows={draftGenerating ? [] : placeholders.map(field => ({ key: field.key, placeholder: `[${field.label}]`, value: placeholderValues[field.key] || '' }))}
                         generating={draftGenerating}
-                        onChange={(key, text) => setPlaceholderValues(prev => ({ ...prev, [key]: text }))}
-                        onClearAll={() => setPlaceholderValues({})}
+                        onChange={handlePlaceholderChange}
+                        onDelete={deletePlaceholder}
+                        onClearAll={clearAllPlaceholders}
                         canClear={!draftGenerating && Object.values(placeholderValues).some(text => text)}
                     />
                 ) : null}
