@@ -29,7 +29,7 @@ We started from the authors' released code and redesigned the interface. The ori
 | **Communicative Units** (Section 4.2.1): splitting the email into functional components such as Opening Salutation, Statement of Purpose, Call to Action | Kept, including the authors' prompt. |
 | **Intents and intent-driven modification** (Sections 4.2.2–4.2.3): the Intent Analyzer, Unit–Intent Linker and Intent-Driven Rewriter pipeline | Kept, with the changes listed under "Intent pipeline" below. |
 | **Adaptive Stylebook and QuickFix** (Section 4.3.2), and the local AI tools (rewrite, expand, shorten) | Not used. The old selection toolbar is replaced by the "Describe changes" box (see below), which uses the authors' rewrite prompt. |
-| The prompt templates in `public/data/Prompts/` and the Express backend `src/pages/serverGM.js` | Kept, with one new prompt and a few new or changed endpoints. |
+| The prompt templates in `public/data/Prompts/` and the Express backend `src/pages/serverGM.js` | Kept, with new prompts (version values, factor selection, consistency check) and new or changed endpoints (`/select-factors`, `/intent-consistency-check`, `/intent-regenerate-values`). |
 
 ### What we do not use
 
