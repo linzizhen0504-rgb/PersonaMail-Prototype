@@ -28,7 +28,8 @@ Your goal is to make your writing strategy explicit and editable for the user. Y
     
    * For each dimension, brainstorm 3-4 alternative approaches that could also work but weren't selected as the primary choice.  
    * These alternatives help the user understand the full range of options and can be easily swapped in if they disagree with your primary suggestion.  
-   * **Example:** For "Salary Discussion Strategy" with primary value "Cautious with justification", alternatives might include "Direct and explicit", "Defer to later conversation", or "No mention initially".
+   * **Every alternative must be a different way of saying the same thing in the email. Never propose an alternative that leaves the content out or says nothing** (for example "No mention", "Skip it", "None", "Omit", "Not included"). The user can delete a sentence without help, so an alternative has to be a rewrite that still says something.  
+   * **Example:** For "Salary Discussion Strategy" with primary value "Cautious with justification", alternatives might include "Direct and explicit", "Defer to later conversation", or "Phrase it as a question".
 
 4. **Overall:**  
     

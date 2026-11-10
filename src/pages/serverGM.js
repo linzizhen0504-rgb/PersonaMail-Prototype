@@ -414,14 +414,15 @@ function alignVariationValues(parsedData, intentSelected) {
 
 // The model has to label every version with exactly one of the intent values it was asked about. Small local models
 // often copy the template's placeholder names instead; guessing the value from the position then attaches a version
-// to the wrong value, so such replies are rejected.
+// to the wrong value, so such replies are rejected. A version may be empty (a value that says to leave the sentence out has
+// nothing to show); the caller drops such versions.
 function variationsMatchValues(parsedData, expectedValues) {
     const variations = parsedData && parsedData.component_variations;
     if (!Array.isArray(variations) || variations.length !== expectedValues.length) return false;
     const wanted = new Set(expectedValues.map(normalizeName));
     const seen = new Set();
     return variations.every(variation => {
-        if (!variation || typeof variation.content !== 'string' || !variation.content.trim()) return false;
+        if (!variation || typeof variation.content !== 'string') return false;
         const key = normalizeName(variation.intent_value);
         if (!wanted.has(key) || seen.has(key)) return false;
         seen.add(key);
@@ -1818,6 +1819,8 @@ app.post('/intent-change-rewriter', async (req, res) => {
         intentOthers
     } = req.body;
     const factorChoicesPath = path.join(__dirname, '../data/SessionData', userName, taskId, 'factors', 'choices.json');
+    // declared here: without it the assignment made a global shared by all requests, so a failed read kept another request's choices
+    let factorChoices;
     try {
     factorChoices = JSON.parse(fs.readFileSync(factorChoicesPath, 'utf-8'));
         } catch (error) {
@@ -1871,7 +1874,17 @@ app.post('/intent-change-rewriter', async (req, res) => {
                 continue;
             }
             if (variationsMatchValues(candidate, expectedValues)) {
-                parsedData = candidate;
+                // Drop the versions that came back empty; the others are still shown. At least one version of another value has to be left
+                const kept = candidate.component_variations.filter(variation => variation.content.trim());
+                if (kept.length < candidate.component_variations.length) {
+                    console.warn(`Intent Change Rewriter: dropped ${candidate.component_variations.length - kept.length} empty version(s)`);
+                }
+                candidate.component_variations = kept;
+                if (kept.some(variation => normalizeName(variation.intent_value) !== normalizeName(expectedValues[0]))) {
+                    parsedData = candidate;
+                } else {
+                    console.warn(`Intent Change Rewriter: no version of another value is left (attempt ${attempt}/3)`);
+                }
             } else {
                 console.warn(`Intent Change Rewriter: versions do not match the requested values (attempt ${attempt}/3)`);
             }

@@ -39,3 +39,6 @@ yarn-error.log*
 __pycache__/
 .pytest_cache/
 /model_service/data/styles.json
+
+# offline experiments on the preference model (scripts, results, figures and raw data stay local)
+/model_service/experiments/

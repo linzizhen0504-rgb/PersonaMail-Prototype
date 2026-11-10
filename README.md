@@ -28,8 +28,8 @@ We started from the authors' released code and redesigned the interface. The ori
 | **Factor Exploration Panel** (Section 4.1): the curated list of communication factors in four categories — relationship, demography, communication context, risk mitigation | Kept unchanged. The factor list, options and selection logic are the authors'. |
 | **Communicative Units** (Section 4.2.1): splitting the email into functional components such as Opening Salutation, Statement of Purpose, Call to Action | Kept, including the authors' prompt. |
 | **Intents and intent-driven modification** (Sections 4.2.2–4.2.3): the Intent Analyzer, Unit–Intent Linker and Intent-Driven Rewriter pipeline | Kept, with the changes listed under "Intent pipeline" below. |
-| **Adaptive Stylebook and QuickFix** (Section 4.3.2), and the local AI tools (rewrite, expand, shorten) | Kept unchanged. |
-| The prompt templates in `public/data/Prompts/` and the Express backend `src/pages/serverGM.js` | Kept, with one new prompt and one new endpoint added. |
+| **Adaptive Stylebook and QuickFix** (Section 4.3.2), and the local AI tools (rewrite, expand, shorten) | Kept unchanged in the `baseline` condition. In the `cards` condition the old selection toolbar is replaced by the "Describe changes" box (see below), which uses the authors' rewrite prompt. |
+| The prompt templates in `public/data/Prompts/` and the Express backend `src/pages/serverGM.js` | Kept, with one new prompt and a few new or changed endpoints. |
 
 ### What we do not use
 
@@ -38,16 +38,41 @@ We started from the authors' released code and redesigned the interface. The ori
 
 ## What We Redesigned
 
-**Interface**
+The redesign applies to both conditions of the study (see "The A/B Experiment"), unless a point says `cards`. The `baseline` condition keeps the original editor behaviour.
 
-- **One page instead of three.** The original has separate Email Task, Email Editor and Anchors pages with a navigation sidebar. Here the user enters a request, picks a template or sets the factors in a chat-style step, and continues in the editor on the same page.
-- **Factor sidebar.** In the editor, the four factor categories sit in a collapsible left sidebar together with the user's request, so the options stay editable while writing. An arrow between the sidebar and the editor hides or shows it.
-- **Templates.** A set of factor choices can be saved under a name, selected from a dropdown, updated or deleted. This replaces both "Save as Default" and the Anchors.
-- **Ask AI to add content.** A box under the editor takes a description of what is missing. The AI returns a revised email as a preview, which the user applies or discards. It is currently hidden (`SHOW_ASK_AI=false` in `EmailEditor.js`) so that it does not interfere with the experiment.
-- **Header and icons.** The navigation sidebar is replaced by a header with the logo, a New Task button and a user menu with Log out.
-- **Simpler editor header.** The Regenerate Draft, Save Draft and Clear Highlighting buttons and the coloured unit circles are removed, and so is the `/regenerate-draft` endpoint. A blue "Generating email…" indicator shows while the draft is written.
+### One page instead of three
 
-**Intent pipeline**
+The original has separate Email Task, Email Editor and Anchors pages with a navigation sidebar. Here the user enters a request, picks a template or sets the factors in a chat-style step, and continues in the editor on the same page. The navigation sidebar is replaced by a header with the logo, a New Task button and a user menu with Log out.
+
+### Sidebar (`cards`)
+
+The left sidebar keeps the request and the options editable while the user writes. Its sections are open by default and can be collapsed with the arrow next to each title; an arrow between the sidebar and the editor hides or shows the whole sidebar.
+
+- **Information to fill.** A table of the `[bracketed]` placeholders still in the draft, with an input for each. Names that appear several times are listed once, and `[A / B]` brackets are split into their own fields. Typing the value yourself in the email removes the field from the table. There is no Apply button: the values are sent with the request when you click **Regenerate with These Options**, and are also filled into the new draft afterwards. If a value does not fit the new draft, a message says so. **Clear All** empties the inputs.
+- **Request.** The user's request, with a **Copy** button.
+- **Template.** A saved set of factor choices is chosen from a dropdown; **Update**, **Add** and **Reset** manage the templates. This replaces both "Save as Default" and the Anchors.
+- **Factors.** The four factor categories of the paper, as before.
+- **Regenerate with These Options** (at the bottom) writes a new draft from the current options and request.
+
+### Generating the email (`cards`)
+
+The draft, its components and the intents are made in one go. While they are made, the page shows its final layout with nothing in it (empty subject line, body card, component list, intents area and information table) and a "Generating email and components…" indicator. Everything appears together once both the email and its components are ready. If the intents cannot be made, the email is shown without components and a message asks the user to click **Regenerate**.
+
+### Editor (`cards`)
+
+- **Subject and body.** The subject is a line of its own, with a **Copy** button. The body is a white card whose top holds the formatting toolbar (bold, italic, underline, H1, H2, lists) and a **Copy** button for the body. The subject line and the toolbar stay in place; only the body scrolls, with its own scrollbar inside the card. The text `Subject:` stays in the draft data but is not shown.
+- **Always editable.** The email can be edited by hand at any time. Cmd/Ctrl+Z undoes and Cmd/Ctrl+Shift+Z or Ctrl+Y redoes, for manual edits and for accepted AI rewrites.
+- **Email Components.** The component list sits at the right of the editor, with a **Regenerate** button that rebuilds the components and intents for the email as it is now (after the user has edited or rewritten it). A one-time tip points at this button after the first generation (once per username).
+- **Click logic.**
+  - Hovering over a unit tints it and shows a pointer.
+  - The first click on a unit highlights it and shows its intents on the right; the first intent is opened at once, so its versions are generated ("Generating versions…"). The caret is placed where the click landed.
+  - A click on the highlighted unit opens the **Describe changes** box for the whole unit.
+  - Selecting text anywhere in the email, also across paragraphs, opens the same box for the selection.
+- **Describe changes box.** The user types what to change; the AI returns a rewrite of only the selected text as a preview, which is accepted or discarded. Accepting replaces the selection (or all selected paragraphs). If the replaced text touches components, the component list is cleared and a note says so. The box does not take the keyboard focus, and typing in the email closes it.
+- **Removed.** The Reset Editor and Generate Components buttons, the old selection toolbar (Quickfix, manual edit and so on), the Component Modification Record dialog, the coloured unit circles, and the Apply button of the information table. A blue loading indicator replaces the Regenerate Draft, Save Draft and Clear Highlighting buttons and the `/regenerate-draft` endpoint.
+- **Ask AI to add content** (a box under the editor) is kept in the code but hidden (`SHOW_ASK_AI=false` in `EmailEditor.js`) so that it does not interfere with the experiment.
+
+### Intent pipeline
 
 - Intent options keep their position when one is selected.
 - Every component is linked to at least one intent. The original prompt deliberately avoids over-linking, which often left components with no intent to adjust.
@@ -64,23 +89,23 @@ http://localhost:3000/?cond=cards&pid=P01
 
 `cond` defaults to `baseline`. The URL overrides what is stored in the session, and `pid` identifies the participant in the logs.
 
-| Condition | Intent UI |
+| Condition | Editor and intent UI |
 |---|---|
-| `baseline` | The original system: radio buttons for the intent values, a Modification Preview and an Apply button. Behaviour is unchanged. |
-| `cards` | **Version Cards.** Each intent is a pill. Clicking a pill shows up to three cards with a red/green word diff of the unit. **Use** applies a card; **Regenerate** asks for new versions. |
+| `baseline` | The original system: the **Generate Components** and **Reset Editor** buttons, the selection toolbar, radio buttons for the intent values, a Modification Preview and an Apply button. Behaviour is unchanged. |
+| `cards` | The editor described above, and **Version Cards**: each intent is a pill; clicking a pill shows up to three cards, with the sentences that differ from the current text in green. **Use** applies a card; **Regenerate** asks for new versions. |
 
 Participants never see anything about the preference model.
 
 ### Version Cards behaviour
 
 - The current value is always excluded. Up to three of the remaining values are shown; their order comes from the preference model (see below) and falls back to random if the model service is down.
-- Each display ends exactly once: **Use**, **Regenerate**, or leaving (selecting another unit or intent, Generate Components, Reset Editor, New Task). Each ending writes one log line and sends one update to the model.
-- **Regenerate** asks the model service whether the shown values were rejected often enough to be replaced. If so, it generates three new intent values (`/intent-regenerate-values`); otherwise it generates new versions for the same values.
+- Each card shows the new text of the unit as plain text. Sentences that are not in the current text are marked in green.
+- Each display ends exactly once: **Use**, **Regenerate**, or leaving (selecting another unit or intent, regenerating the components, New Task). Each ending writes one log line and sends one update to the model.
+- **Regenerate** (the one in the version area) asks the model service whether the shown values were rejected often enough to be replaced. If so, it generates three new intent values (`/intent-regenerate-values`); otherwise it generates new versions for the same values. The Regenerate button of the component list is a different button: it rebuilds the components and counts as leaving.
 - **Intent propagation.** Several units can share one intent. After **Use**, the other units that share the intent are rewritten in parallel to the same value and written into the editor, and the intent's current value is updated. A rewrite is rejected if it contains other units' text, is far longer than the original, or creates repeated sentences; it is retried once and then skipped.
 - **Version filtering.** Versions that would duplicate or swallow other parts of the email are dropped before display. If none survive after a retry, the user sees "Couldn't generate versions. Try again."
 - **Label check.** The rewriter prompt receives the real intent values, and the reply must match them one to one, with up to three retries. Otherwise the request fails instead of showing a mislabeled card.
-- **First-use guide.** A short tour points to **Generate Components**, shown once per username in the `cards` condition.
-- Highlighting marks the selected unit in the editor with a background colour only. If the unit cannot be located exactly, a looser search inside a single paragraph is used.
+- Highlighting marks the selected unit in the editor with a background colour only. A unit is located in the email by its text; if it cannot be found exactly, a looser search inside a single paragraph is used. Before the components are made, the draft file is updated with what is in the editor, so hand edits do not break this.
 
 ### Preference model
 
@@ -101,7 +126,7 @@ A Python service in `model_service/` (FastAPI, port 3003) decides which values t
 - Final score = Beta sample + 1.5 × strength × relative style score of the card within the shown set.
 - The state is kept per participant and per email (`taskId:draftVersion`), and starts again for every new draft or New Task. It is stored in `model_service/data/styles.json`.
 
-We compared three style representations offline (MiniLM only, StyleDistance only, both). MiniLM with rewrite-minus-original plus value words worked best on the simulated preference-transfer test, so StyleDistance is not used.
+The style representation uses only the MiniLM model already used by the service: the rewritten text minus the current text, plus the words of the value.
 
 **Endpoints**
 
@@ -119,7 +144,9 @@ CORS allows `localhost:3000` and `127.0.0.1:3000`. If the service is unreachable
 
 The backend writes one JSON line per event to `src/data/logs/{pid}.jsonl` through `POST /log-event` (ignored by git).
 
-- `cards`: `cards_shown` (context, ordering, `mmr_used`, trigger, `style_strength`, filtered candidates), `pick`, `regenerate`, `leave`, `edit_done` (text edited after Use, for analysis only), `values_regenerated`, `versions_regenerated`, `regenerate_failed`, `model_unavailable`, `intent_propagated` (updated and failed units).
+- `cards`:
+  - Versions: `cards_shown` (context, ordering, `mmr_used`, trigger, `style_strength`, filtered candidates), `pick`, `regenerate`, `leave`, `edit_done` (text edited after Use, for analysis only), `values_regenerated`, `versions_regenerated`, `regenerate_failed`, `model_unavailable`, `intent_propagated` (updated and failed units).
+  - Editor: `unit_click_select` (a unit was selected by clicking it), `selection_rewrite_requested`, `selection_rewrite_applied`, `selection_rewrite_discarded`, `selection_rewrite_undone`, `selection_rewrite_redone` (the Describe changes box; `trigger` is `click` or `selection`), `copy_section` (subject or body copied), `placeholders_applied` (the labels of the filled fields and of the ones that were not used; the typed values are not logged).
 - `baseline`: `preview_shown`, `apply`, `leave`.
 
 `model_service/build_priors.py --pids P01 P02` turns logs into `priors.json`, and `convert_legacy_data.py` converts counts from the older three-outcome format.
@@ -134,7 +161,7 @@ cd PersonaMail-Prototype
 npm install
 ```
 
-The `main` branch is this version. The earlier interface-only prototype is kept on the `prototype1` branch.
+The `main` and `prototype2` branches are this version. The earlier interface-only prototype is kept on the `prototype1` branch.
 
 ### 2. Add your Gemini API key
 
@@ -197,20 +224,21 @@ pytest -m slow    # also loads the real MiniLM model
 
 ## Using the Prototype
 
-Open the app with a condition in the URL: `http://localhost:3000/?cond=cards&pid=P01` for Version Cards, or `?cond=baseline` for the original interface. Without `cond` the app runs `baseline`, which looks like the earlier prototype, and the condition is remembered until the tab is closed.
+Open the app with a condition in the URL: `http://localhost:3000/?cond=cards&pid=P01` for Version Cards, or `?cond=baseline` for the original interface. Without `cond` the app runs `baseline`, and the condition is remembered until the tab is closed.
 
 1. Enter a username at the top right.
 2. Describe the email you need and send.
 3. Choose a saved template or select the factors that matter, then click **Generate Email Draft**.
-4. In the editor, edit the text directly, or change the factors in the sidebar and generate a new draft.
-5. Click **Generate Components** to split the email into components. Select a component to see its intents.
-6. In `baseline`, choose another value, preview the rewrite and click **Apply**. In `cards`, click an intent pill and **Use** one of the cards, or **Regenerate**.
+4. In `cards`, wait for the email and its components to appear together. In `baseline`, click **Generate Components** to split the email into components.
+5. Edit the text directly, or change the options in the sidebar, fill in the information table and click **Regenerate with These Options** for a new draft.
+6. In `cards`, click a unit to see its intents (the first one opens at once), click an intent pill to switch, and **Use** one of the cards or **Regenerate** it. Click the highlighted unit, or select text, to ask the AI for a change in your own words. After editing the email by hand, click **Regenerate** next to Email Components to rebuild the components.
+7. In `baseline`, select a component, choose another value for an intent, preview the rewrite and click **Apply**.
 
 ## Notes
 
 - Templates are stored in the browser's local storage, per username. They are not shared between browsers or machines.
 - Drafts and session data are written to `src/data/SessionData/`, and API logs to `src/pages/api_logs/`. Both stay local and are ignored by git.
-- Generating components makes three model calls and can take a while, especially with a local model. Intent propagation can take 30 to 120 seconds with a local model, and the editor refreshes when it finishes.
+- Making the components takes several model calls (the email, the components, the intents and their links) and can take a while, especially with a local model. Intent propagation can take 30 to 120 seconds with a local model, and the editor refreshes when it finishes.
 - Model counts and style state live in `model_service/data/` (`counts.json`, `stats.json`, `styles.json`), also ignored by git. Delete them to reset the model.
 - The study data of each participant are kept under their `pid`. Use a separate `pid` such as `PT01` for testing.
 

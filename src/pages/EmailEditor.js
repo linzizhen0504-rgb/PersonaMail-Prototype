@@ -1,13 +1,16 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
+import { withHistory } from 'slate-history';
 import { Card, Typography, message, Button, Row, Col, Tooltip, Tag, Radio, Checkbox, Flex, Modal, Input, Spin, Tour } from 'antd';
 import axios from 'axios';
-import { diffWords } from 'diff';
-import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined } from '@ant-design/icons';
+import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
 import stylebookSVG from '../stylebook.svg';
 import FactorPanel, { useFactorSelection } from './FactorPanel';
+import SelectionRewriteBox, { CARD_BORDER_RADIUS } from './SelectionRewriteBox';
+import PlaceholderTable from './PlaceholderTable';
+import { findPlaceholderFields, fillPlaceholders, knownPlaceholderKeys } from './placeholders';
 import { RobotIcon, UserAvatarIcon, BotAvatarIcon } from '../icons';
 
 const { Title } = Typography;
@@ -184,6 +187,19 @@ const locateUnitText = (text, content) => {
 // Plain form of a text for comparing: lower case, no punctuation, single spaces
 const plainText = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
 
+// cards: the text of a version card with the sentences that are not in the current text marked green.
+// `oldTexts` are the texts the sentences are compared with (the unit as the rewriter saw it and as it is in the editor now).
+// A line break also ends a sentence, so a greeting or a sign-off without a full stop is compared on its own.
+const renderChangedSentences = (oldTexts, newText) => {
+    const split = (text) => String(text || '').split(/(?<=[.!?。！？])(\s+)|(\s*\n\s*)/).filter(part => part !== undefined);
+    const known = new Set();
+    oldTexts.forEach(text => split(text).forEach(part => { const key = plainText(part); if (key) known.add(key); }));
+    return split(newText).map((part, i) => {
+        if (!part.trim() || known.has(plainText(part))) return part;
+        return <span key={i} style={{ background: '#e3f5ea', color: '#137a3e', borderRadius: '3px', padding: '1px 2px' }}>{part}</span>;
+    });
+};
+
 // How often each longer sentence occurs in the given paragraphs
 const sentenceCounts = (texts) => {
     const counts = new Map();
@@ -251,8 +267,99 @@ const getNodeText = (editor, node) => {
 
 
 
+// The selected part of each paragraph from the start offset in the first to the end offset in the last, joined as paragraphs
+const joinSelectedBlocks = (blocks, startBlock, startOffset, endBlock, endOffset) => {
+    const pieces = [];
+    for (let i = startBlock; i <= endBlock; i++) {
+        const text = blocks[i] || '';
+        const piece = text.slice(i === startBlock ? startOffset : 0, i === endBlock ? endOffset : text.length);
+        if (piece.trim()) pieces.push(piece);
+    }
+    return pieces.join('\n\n');
+};
+
+// cards: the scrollbar of the body, drawn over the right side of the body card. The native scrollbar is hidden so that it takes no
+// column of its own; this one sits below the fixed subject line and toolbar and never covers them.
+const OverlayScrollbar = ({ scrollerRef }) => {
+    const thumbRef = useRef(null);
+    const hideTimer = useRef(null);
+    const update = useCallback(() => {
+        const scroller = scrollerRef.current;
+        const thumb = thumbRef.current;
+        if (!scroller || !thumb) return;
+        const head = scroller.querySelector('.editor-sticky-head');
+        const headHeight = head ? head.offsetHeight : 0;
+        const track = scroller.clientHeight - headHeight - 12;
+        const scrollable = scroller.scrollHeight - scroller.clientHeight;
+        if (scrollable <= 1 || track <= 24) { thumb.style.display = 'none'; return; }
+        const height = Math.max(28, track * (scroller.clientHeight / scroller.scrollHeight));
+        thumb.style.display = 'block';
+        thumb.style.height = `${height}px`;
+        thumb.style.top = `${16 + headHeight + 6 + (scroller.scrollTop / scrollable) * (track - height)}px`;
+    }, [scrollerRef]);
+    const flash = useCallback(() => {
+        const thumb = thumbRef.current;
+        if (!thumb) return;
+        thumb.classList.add('is-active');
+        clearTimeout(hideTimer.current);
+        hideTimer.current = setTimeout(() => thumb.classList.remove('is-active'), 900);
+    }, []);
+    useEffect(() => {
+        const scroller = scrollerRef.current;
+        if (!scroller) return undefined;
+        const onScroll = () => { update(); flash(); };
+        scroller.addEventListener('scroll', onScroll);
+        const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+        if (observer) {
+            observer.observe(scroller);
+            if (scroller.firstElementChild) observer.observe(scroller.firstElementChild);
+        }
+        update();
+        return () => {
+            scroller.removeEventListener('scroll', onScroll);
+            if (observer) observer.disconnect();
+            clearTimeout(hideTimer.current);
+        };
+    }, [scrollerRef, update, flash]);
+    useEffect(update);
+    // dragging the thumb
+    const startDrag = (event) => {
+        const scroller = scrollerRef.current;
+        if (!scroller) return;
+        event.preventDefault();
+        const head = scroller.querySelector('.editor-sticky-head');
+        const track = scroller.clientHeight - (head ? head.offsetHeight : 0) - 12;
+        const thumbHeight = thumbRef.current.offsetHeight;
+        const startY = event.clientY;
+        const startTop = scroller.scrollTop;
+        const scrollable = scroller.scrollHeight - scroller.clientHeight;
+        const onMove = (moveEvent) => {
+            scroller.scrollTop = startTop + ((moveEvent.clientY - startY) / Math.max(1, track - thumbHeight)) * scrollable;
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    };
+    return (
+        <>
+            <style>{`
+                .email-scroll { scrollbar-width: none; }
+                .email-scroll::-webkit-scrollbar { display: none; }
+                .overlay-thumb { position: absolute; right: 20px; width: 6px; border-radius: 3px; background: rgba(0, 0, 0, 0.18);
+                    z-index: 4; display: none; transition: background 0.2s; }
+                .overlay-thumb:hover, .overlay-thumb.is-active { background: rgba(0, 0, 0, 0.4); }
+            `}</style>
+            <div ref={thumbRef} className='overlay-thumb' onMouseDown={startDrag} />
+        </>
+    );
+};
+
 const EmailEditor = () => {
-    const editor = useMemo(() => withReact(createEditor()), []);
+    // cards: manual edits can be undone (Ctrl/Cmd+Z) and redone; baseline keeps the plain editor
+    const editor = useMemo(() => (EXPERIMENT.cond === 'cards' ? withHistory(withReact(createEditor())) : withReact(createEditor())), []);
     const { globalState } = useGlobalContext();
     const { username: globalUsername, taskId: globalTaskId, userTask: globalUserTask } = globalState;
 
@@ -319,11 +426,67 @@ const EmailEditor = () => {
     const [loading, setLoading] = useState(true);
     const [contentLoaded, setContentLoaded] = useState(false);
     const [editorKey, setEditorKey] = useState(0);
+    // The editor is remounted with new content whenever the program replaces text (a new draft, a version card, an AI rewrite,
+    // filled-in information). Operations recorded before that no longer fit the document, so the undo history starts again.
+    useEffect(() => {
+        if (editor.history) editor.history = { undos: [], redos: [] };
+        // cards: a click that selected a unit remounted the editor: the caret goes back to the character that was clicked
+        const pending = pendingCaretRef.current;
+        if (!pending) return undefined;
+        pendingCaretRef.current = null;
+        const timer = setTimeout(() => {
+            const block = editor.children[pending.block];
+            if (!block || !Array.isArray(block.children)) return;
+            let remaining = pending.offset;
+            for (let i = 0; i < block.children.length; i++) {
+                const length = block.children[i].text ? block.children[i].text.length : 0;
+                if (remaining <= length || i === block.children.length - 1) {
+                    try {
+                        ReactEditor.focus(editor);
+                        Transforms.select(editor, { path: [pending.block, i], offset: Math.min(remaining, length) });
+                    } catch (error) {
+                        console.warn('Could not place the caret:', error);
+                    }
+                    return;
+                }
+                remaining -= length;
+            }
+        }, 60);
+        return () => clearTimeout(timer);
+    }, [editor, editorKey]);
     const [components, setComponents] = useState([]);
     const [selectedComponentId, setSelectedComponentId] = useState(null);
     const [highlightedRanges, setHighlightedRanges] = useState([]);
     const [floatingToolbar, setFloatingToolbar] = useState({ visible: false, component: null, position: null });
     const editorRef = useRef(null);
+    // cards: "Describe changes" box under a text selection inside one unit (null when closed)
+    const [rewriteBox, setRewriteBox] = useState(null);
+    const rewriteBoxElementRef = useRef(null);   // the box itself, to tell clicks inside it from clicks outside
+    const rewriteBoxStateRef = useRef(null);     // latest rewriteBox, for handlers that outlive a render
+    rewriteBoxStateRef.current = rewriteBox;
+    const rewriteRequestRef = useRef(0);         // answers of requests that were closed or superseded are ignored
+    const aiHistoryRef = useRef({ undos: [], redos: [] }); // snapshots from before each AI rewrite that remounted the editor
+    const undoRedoRef = useRef(() => false);
+    const hoveredUnitRef = useRef(null);
+    const pendingCaretRef = useRef(null);
+    const closeRewriteBoxRef = useRef(() => {});
+    const editorScrollRef = useRef(null);
+    // cards: the fields the draft still asks for ([{ key, label }], each piece of information once even when it occurs in
+    // several [brackets]), and the values typed for them in the sidebar table, by key
+    const [placeholderValues, setPlaceholderValues] = useState({});
+    const draftTextForPlaceholders = useMemo(() => (value || []).map(node => getNodeText(null, node)).join('\n'), [value]);
+    const placeholders = useMemo(() => findPlaceholderFields(draftTextForPlaceholders), [draftTextForPlaceholders]);
+    // A field that was edited away by hand leaves the table together with the value typed for it
+    useEffect(() => {
+        setPlaceholderValues(prev => {
+            const present = new Set(placeholders.map(field => field.key));
+            const gone = Object.keys(prev).filter(key => !present.has(key));
+            if (gone.length === 0) return prev;
+            const next = { ...prev };
+            gone.forEach(key => { delete next[key]; });
+            return next;
+        });
+    }, [placeholders]);
     const [originalText, setOriginalText] = useState('');
     // Add this state near other useState declarations
     const [combinedResults, setCombinedResults] = useState([]);
@@ -358,7 +521,7 @@ const EmailEditor = () => {
     // The editor stays blank until a draft has been generated from the factor panel
     const [hasDraft, setHasDraft] = useState(false);
     const [draftGenerating, setDraftGenerating] = useState(false);
-    // First-use guide (cards condition): after the first draft, point the user to "Generate Components".
+    // First-use guide (cards condition): after the first draft, point the user to the Regenerate button of the components.
     // Shown once per username; the flag lives in localStorage (without storage it shows once per page load).
     const generateButtonRef = useRef(null);
     const guideKey = `personamail_guide_components_seen:${globalUsername || ''}`;
@@ -392,12 +555,51 @@ const EmailEditor = () => {
         });
     };
     // Factor selections are made in the chat step first, then stay editable in the editor sidebar
+    // cards: the "Information to fill" table has no Apply button; the values typed in it go into the draft that "Regenerate with
+    // These Options" produces. A field without a value stays in its brackets.
+    // The values typed in the table are given to the writer with the request, so the new draft uses them where it needs them (a new
+    // draft often words its placeholders differently, so they cannot all be matched afterwards)
+    const buildFillNote = () => {
+        if (EXPERIMENT.cond !== 'cards') return '';
+        const typed = placeholders
+            .filter(field => (placeholderValues[field.key] || '').trim())
+            .map(field => `${field.label} = ${placeholderValues[field.key].trim()}`);
+        if (typed.length === 0) return '';
+        return `The sender has already filled in these details. Write them into the email exactly as given, in place of the matching bracketed placeholders (leave any other placeholder in brackets): ${typed.join('; ')}.`;
+    };
+    const handleDraftGenerated = async (draft) => {
+        let text = draft;
+        const fills = new Map(Object.entries(placeholderValues)
+            .filter(([, typed]) => (typed || '').trim())
+            .map(([key, typed]) => [key, typed.trim()]));
+        if (EXPERIMENT.cond === 'cards' && fills.size > 0) {
+            text = fillPlaceholders(draft, fills, knownPlaceholderKeys(draft));
+        }
+        startNewStyleSession();
+        applyDraftText(text);
+        if (text !== draft) {
+            // The server saved the draft with the brackets; the draft file follows the editor
+            await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: text })
+                .catch(error => console.error('Error saving draft to sessionData:', error));
+        }
+        if (EXPERIMENT.cond === 'cards' && fills.size > 0) {
+            // Typed values that are in the new draft, whether the writer put them in or they were filled in afterwards
+            const applied = placeholders.filter(field => fills.has(field.key) && text.includes(fills.get(field.key)));
+            const missed = placeholders.filter(field => fills.has(field.key) && !text.includes(fills.get(field.key)));
+            logEvent({ event: 'placeholders_applied', placeholders: applied.map(field => field.label), count: applied.length, not_used: missed.map(field => field.label) });
+            if (applied.length > 0) message.success(`Filled in ${applied.length} ${applied.length === 1 ? 'item' : 'items'}`);
+            if (missed.length > 0) message.warning(`${missed.map(field => field.label).join(', ')} did not fit the new draft and was not used.`);
+        }
+        // cards: the components and their intents are made together with the draft; the page shows nothing until both are ready
+        if (EXPERIMENT.cond === 'cards') await handleExtractComponents({ freshDraft: true });
+    };
     const factorSelection = useFactorSelection({
         userTask,
         userName: globalUsername,
         taskId: globalTaskId,
-        onDraftGenerated: (draft) => { startNewStyleSession(); applyDraftText(draft); },
-        onLoadingChange: setDraftGenerating
+        onDraftGenerated: handleDraftGenerated,
+        onLoadingChange: setDraftGenerating,
+        getExtraRequest: buildFillNote
     });
     const powerChoice = factorSelection.selectedFactors && factorSelection.selectedFactors[POWER_FACTOR_ID]
         ? (factorSelection.selectedValues || {})[POWER_FACTOR_ID] : null;
@@ -494,6 +696,8 @@ const EmailEditor = () => {
         setCombinedResults([]);
         setSelectedComponentId(null);
         setFloatingToolbar({ visible: false, component: null, position: null });
+        closeRewriteBoxRef.current();
+        setPlaceholderValues({});
         setHasDraft(Boolean(newContent.trim()));
     };
 
@@ -671,11 +875,22 @@ const EmailEditor = () => {
         });
     };
     // Extract components using the component extractor
-    const handleExtractComponents = async () => {
+    // freshDraft: called right after a draft was generated (cards): the editor holds a new, unmarked draft and the draft file is
+    // already up to date, so neither has to be touched
+    const handleExtractComponents = async ({ freshDraft = false } = {}) => {
         try {
             setLoading(true);
             // 清除之前的所有dimension和highlight标记
-            clearAllMarkers();
+            if (!freshDraft) clearAllMarkers();
+            if (EXPERIMENT.cond === 'cards' && !freshDraft) {
+                // The components are cut from the draft file: it has to hold what is in the editor now (typed edits are not saved on their own),
+                // or the units would not be found in the editor and nothing would be highlighted
+                const current = valueRef.current.map(node => getNodeText(null, node)).filter(text => text.trim()).join('\n\n');
+                if (current.trim()) {
+                    await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: current })
+                        .catch(error => console.error('Error saving draft to sessionData:', error));
+                }
+            }
             const response = await axios.post('http://localhost:3001/component-extractor', {
                 taskId: globalTaskId,
                 userName: globalUsername,
@@ -695,10 +910,15 @@ const EmailEditor = () => {
                 }
             }
 
-            setComponents(extractedComponents);
+            // cards: the components and their intents are shown together, once both are ready (see handleCombinedResult)
+            if (EXPERIMENT.cond !== 'cards') {
+                setComponents(extractedComponents);
+                message.success(`Extracted ${extractedComponents.length} components`);
+            } else {
+                setComponents([]);
+            }
             setSelectedComponentId(null); // 清除选中状态
             setCombinedResults([]); // 清除之前的combined results
-            message.success(`Extracted ${extractedComponents.length} components`);
 
             commonComponents = extractedComponents;
             console.log('Assigned Common Components:', commonComponents);
@@ -724,10 +944,16 @@ const EmailEditor = () => {
                     ? JSON.parse(linkResponse.data.links) 
                     : linkResponse.data.links;
                 console.log('Component-Intent Link Results:', linkResults);
-                handleCombinedResult();
+                if (EXPERIMENT.cond === 'cards') {
+                    if (!(await handleCombinedResult())) throw new Error('Could not combine the components and the intents');
+                } else {
+                    handleCombinedResult();
+                }
             } catch (intentError) {
                 console.error('Error calling intent-analyzer-new or component-intent-link:', intentError);
-                message.error('Failed to generate intents. Please click "Generate Components" again.');
+                message.error(EXPERIMENT.cond === 'cards'
+                    ? 'Failed to generate intents. Please click Regenerate.'
+                    : 'Failed to generate intents. Please click "Generate Components" again.');
             }
         } catch (error) {
             console.error('Failed to extract components:', error);
@@ -1121,8 +1347,8 @@ const EmailEditor = () => {
                 return;
             }
             
-            // Check if there was a previous modification and show modal
-            if (lastModifiedComponent && lastModifiedComponent.componentId !== component.id) {
+            // Check if there was a previous modification and show modal (cards: no modification record is asked for)
+            if (EXPERIMENT.cond !== 'cards' && lastModifiedComponent && lastModifiedComponent.componentId !== component.id) {
                 setChangeModal({
                     visible: true,
                     oldContent: lastModifiedComponent.oldContent,
@@ -2588,15 +2814,16 @@ const DetailsModalContent = ({ recommendation, globalTaskId, globalUsername }) =
 };
 
 // Toolbar Button Component
-const ToolbarButton = ({ format, children, isActive, onMouseDown }) => {
+const ToolbarButton = ({ format, children, isActive, onMouseDown, compact }) => {
     return (
         <button
+            className={compact ? 'tb-compact-button' : undefined}
             onMouseDown={onMouseDown}
             style={{
-                padding: '8px 12px',
-                border: '1px solid #d9d9d9',
-                background: isActive ? '#1890ff' : '#fff',
-                color: isActive ? '#fff' : '#000',
+                padding: compact ? '4px 10px' : '8px 12px',
+                border: compact ? '1px solid transparent' : '1px solid #d9d9d9',
+                background: isActive ? (compact ? '#e6efff' : '#1890ff') : (compact ? 'transparent' : '#fff'),
+                color: isActive ? (compact ? '#2f6fde' : '#fff') : '#000',
                 cursor: 'pointer',
                 borderRadius: '4px',
                 marginRight: '4px',
@@ -2613,21 +2840,35 @@ const ToolbarButton = ({ format, children, isActive, onMouseDown }) => {
 };
 
 // Toolbar Component
-const Toolbar = () => {
+// compact: the toolbar at the top of the body card (cards): no grey bar, flat buttons, `trailing` (the copy button) at the right end
+const Toolbar = ({ compact = false, trailing = null }) => {
     const editor = useSlate();
 
     return (
-        <div style={{
-            padding: '8px',
-            borderBottom: '1px solid #d9d9d9',
-            background: '#fafafa',
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: '4px',
-        }}>
+        <div
+            contentEditable={compact ? false : undefined}
+            style={compact ? {
+                padding: '8px 0 6px',
+                margin: '0 0 0 -10px', // the first button's letter lines up with the text below (the button has 10px of padding)
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: '4px',
+                userSelect: 'none',
+            } : {
+                padding: '8px',
+                borderBottom: '1px solid #d9d9d9',
+                background: '#fafafa',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: '4px',
+            }}
+        >
+            {compact && <style>{`.tb-compact-button:hover { background: #f0f2f5 !important; }`}</style>}
             {/* Text formatting buttons */}
             <ToolbarButton
+                compact={compact}
                 format="bold"
                 isActive={isFormatActive(editor, 'bold')}
                 onMouseDown={(event) => {
@@ -2639,6 +2880,7 @@ const Toolbar = () => {
             </ToolbarButton>
             
             <ToolbarButton
+                compact={compact}
                 format="italic"
                 isActive={isFormatActive(editor, 'italic')}
                 onMouseDown={(event) => {
@@ -2650,6 +2892,7 @@ const Toolbar = () => {
             </ToolbarButton>
             
             <ToolbarButton
+                compact={compact}
                 format="underline"
                 isActive={isFormatActive(editor, 'underline')}
                 onMouseDown={(event) => {
@@ -2664,6 +2907,7 @@ const Toolbar = () => {
 
             {/* Block element buttons */}
             <ToolbarButton
+                compact={compact}
                 format="heading-one"
                 isActive={isBlockActive(editor, 'heading-one')}
                 onMouseDown={(event) => {
@@ -2675,6 +2919,7 @@ const Toolbar = () => {
             </ToolbarButton>
             
             <ToolbarButton
+                compact={compact}
                 format="heading-two"
                 isActive={isBlockActive(editor, 'heading-two')}
                 onMouseDown={(event) => {
@@ -2689,6 +2934,7 @@ const Toolbar = () => {
 
             {/* List buttons */}
             <ToolbarButton
+                compact={compact}
                 format="bulleted-list"
                 isActive={isBlockActive(editor, 'bulleted-list')}
                 onMouseDown={(event) => {
@@ -2700,6 +2946,7 @@ const Toolbar = () => {
             </ToolbarButton>
             
             <ToolbarButton
+                compact={compact}
                 format="numbered-list"
                 isActive={isBlockActive(editor, 'numbered-list')}
                 onMouseDown={(event) => {
@@ -2709,17 +2956,151 @@ const Toolbar = () => {
             >
                 1. List
             </ToolbarButton>
+            {trailing && <span style={{ marginLeft: 'auto' }}>{trailing}</span>}
         </div>
     );
 };
 
 
     // Custom render functions for rich text elements
-    const renderElement = ({ attributes, children, element }) => {
-        const paragraphStyle = {
-            marginBottom: '20px', // 增加段间距
-            marginTop: '0'
-        };
+    // cards: a bar with a copy button marks where the subject and the body begin
+    const SUBJECT_PATTERN = /^\s*subject\s*:\s*/i;
+    const sectionLayout = () => {
+        const texts = editor.children.map(node => getNodeText(null, node));
+        const first = texts.findIndex(text => text.trim());
+        if (first === -1) return null;
+        const hasSubject = SUBJECT_PATTERN.test(texts[first]);
+        const bodyIndex = hasSubject ? texts.findIndex((text, i) => i > first && text.trim()) : first;
+        return { texts, subjectIndex: hasSubject ? first : -1, bodyIndex };
+    };
+    const copySection = async (kind) => {
+        const layout = sectionLayout();
+        if (!layout) return;
+        const content = kind === 'subject'
+            ? layout.texts[layout.subjectIndex].replace(SUBJECT_PATTERN, '').trim()
+            : layout.texts.slice(layout.bodyIndex).filter(text => text.trim()).join('\n\n').trim();
+        try {
+            await navigator.clipboard.writeText(content);
+            message.success(kind === 'subject' ? 'Subject copied' : 'Body copied');
+            logEvent({ event: 'copy_section', section: kind });
+        } catch (error) {
+            message.error('Could not copy to the clipboard');
+        }
+    };
+    // The leaf at the start of the subject paragraph that holds "Subject:" is marked so renderLeaf can hide it
+    const decorateSubjectPrefix = ([node, path]) => {
+        if (!Text.isText(node) || path.length !== 2 || path[1] !== 0) return [];
+        const layout = sectionLayout();
+        if (!layout || layout.subjectIndex !== path[0]) return [];
+        const match = SUBJECT_PATTERN.exec(node.text);
+        if (!match) return [];
+        return [{ anchor: { path, offset: 0 }, focus: { path, offset: match[0].length }, subjectPrefix: true }];
+    };
+    // Offset of a point inside its paragraph
+    const blockOffsetOf = (point) => {
+        const block = editor.children[point.path[0]];
+        let offset = point.offset;
+        for (let i = 0; i < point.path[1]; i++) offset += getNodeText(null, { children: [block.children[i]] }).length;
+        return offset;
+    };
+    const BOX_BORDER = '1px solid #d9d9d9';
+    const BOX_RADIUS = 8; // same as the outer editor card (antd Card)
+    const renderCopyButton = (kind) => (
+        <Button
+            size="small"
+            type="text"
+            icon={<CopyOutlined />}
+            aria-label={kind === 'subject' ? 'Copy subject' : 'Copy body'}
+            style={{ color: '#8c8c8c' }}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => copySection(kind)}
+        >
+            Copy
+        </Button>
+    );
+    // The body card opens with the formatting toolbar and the copy button, like a mail window
+    const renderBodyHeader = () => <Toolbar compact trailing={renderCopyButton('body')} />;
+    // cards: the grey frame around the scrolling area (the 16px sides and the space above and below)
+    const EditorFrame = EXPERIMENT.cond === 'cards' ? 'div' : React.Fragment;
+    const frameProps = EXPERIMENT.cond === 'cards'
+        ? { className: 'card-frame', style: { flex: 1, minHeight: 0, background: '#f5f6f8', padding: '16px 16px 20px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', position: 'relative' } }
+        : {};
+    // The scrollbar track starts below the fixed head: its height is handed to the stylesheet
+    useEffect(() => {
+        const scroller = editorScrollRef.current;
+        if (EXPERIMENT.cond !== 'cards' || !scroller) return;
+        const head = scroller.querySelector('.editor-sticky-head');
+        const subject = scroller.querySelector('.subject-row');
+        const frame = scroller.parentElement;
+        scroller.style.setProperty('--head-h', `${head ? head.offsetHeight : 0}px`);
+        // the card starts 20px under the subject line
+        frame.style.setProperty('--card-top', `${subject ? subject.offsetHeight + 20 : 0}px`);
+        frame.setAttribute('data-card', sectionLayout() ? '1' : '0');
+    });
+    // The editor content is a flat list of paragraphs, so a box is drawn piece by piece: the first paragraph carries the top
+    // edge and the header, the last one the bottom edge, and all of them the sides (flow-root keeps the paragraph margins inside)
+    const renderElement = (props) => {
+        const { attributes, children, element } = props;
+        if (EXPERIMENT.cond === 'cards') {
+            const layout = sectionLayout();
+            const index = layout ? editor.children.indexOf(element) : -1;
+            if (index !== -1) {
+                const last = editor.children.length - 1;
+                let kind = null;
+                let first = false;
+                let closing = false;
+                if (index === layout.subjectIndex) {
+                    // Like the subject line of a mail window: a label, the text on a line, the copy button at the end
+                    // The subject line and the top of the body card (its toolbar) stay in place at the top while the body scrolls
+                    // under them (sticky); the paragraphs of the body follow as the rest of the card
+                    return (
+                        <div
+                            {...attributes}
+                            className="editor-sticky-head"
+                            style={{ position: 'sticky', top: 0, zIndex: 3, background: '#f5f6f8', flex: 'none' }}
+                        >
+                            <div
+                                className="subject-row"
+                                style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: BOX_BORDER, margin: '0 4px 20px', minHeight: '44px' }}
+                            >
+                                <span contentEditable={false} style={{ color: '#8c8c8c', fontSize: '15px', userSelect: 'none', flex: 'none' }}>Subject:</span>
+                                <div style={{ flex: 1, minWidth: 0 }}>{renderPlainElement({ attributes: {}, children, element })}</div>
+                                <span contentEditable={false} style={{ flex: 'none' }}>{renderCopyButton('subject')}</span>
+                            </div>
+                            <div
+                                contentEditable={false}
+                                // the white card is drawn behind the scroller (see .card-bg)
+                                style={{ background: '#fff', padding: '0 16px', margin: 0, borderRadius: `${BOX_RADIUS}px ${BOX_RADIUS}px 0 0` }}
+                            >
+                                {renderBodyHeader()}
+                            </div>
+                        </div>
+                    );
+                }
+                // With a subject line the top of the card (with the toolbar) belongs to the fixed head above, so no paragraph opens it
+                if (layout.bodyIndex !== -1 && index >= layout.bodyIndex) { kind = 'body'; first = index === layout.bodyIndex && layout.subjectIndex === -1; closing = index === last; }
+                if (kind) {
+                    return (
+                        <div
+                            {...attributes}
+                            style={{
+                                display: 'flow-root',
+                                // the card itself (white, border, corners) is drawn behind the scroller, so the scrollbar sits inside it
+                                padding: `0 16px ${closing ? 8 : 0}px`,
+                                marginTop: 0,
+                                flex: closing ? '1 0 auto' : 'none'
+                            }}
+                        >
+                            {first && renderBodyHeader()}
+                            {renderPlainElement({ attributes: {}, children, element })}
+                        </div>
+                    );
+                }
+            }
+        }
+        return renderPlainElement(props);
+    };
+    const renderPlainElement = ({ attributes, children, element }) => {
         switch (element.type) {
             case 'heading-one':
                 return <h1 {...attributes}>{children}</h1>;
@@ -2865,6 +3246,38 @@ const applyDimensionsToValue = (editorValue, componentContent, componentId, link
     });
 
     return newValue;
+};
+// cards: every unit is clickable, also one without intents. The unit's text is found inside a single paragraph (tolerant of
+// whitespace and quote style) and only that stretch is marked; leaves already marked for other units of the same paragraph stay
+// as they are. A unit that runs over several paragraphs goes through addDimensionsToValue.
+const markUnitInValue = (editorValue, content, componentId, linkedIntents) => {
+    const meta = { hasDimensions: linkedIntents.length > 0, linkedIntents, componentId };
+    let found = -1;
+    let span = null;
+    editorValue.forEach((node, i) => {
+        if (found !== -1 || !node || !Array.isArray(node.children)) return;
+        const match = locateUnitText(getNodeText(null, node), content);
+        if (match) { found = i; span = match; }
+    });
+    if (found === -1) return addDimensionsToValue(editorValue, content, componentId, linkedIntents);
+    return editorValue.map((node, i) => {
+        if (i !== found) return node;
+        const children = [];
+        let offset = 0;
+        node.children.forEach(child => {
+            const text = child.text || '';
+            const start = offset;
+            const end = offset + text.length;
+            offset = end;
+            const from = Math.max(span.start, start) - start;
+            const to = Math.min(span.end, end) - start;
+            if (to <= from || child.componentId) { children.push(child); return; }
+            if (from > 0) children.push({ ...child, text: text.slice(0, from) });
+            children.push({ ...child, ...meta, text: text.slice(from, to) });
+            if (to < text.length) children.push({ ...child, text: text.slice(to) });
+        });
+        return { ...node, children };
+    });
 };
 // 2. 新增：为所有components初始化dimension标记的函数
 const initializeAllDimensions = () => {
@@ -3023,16 +3436,71 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         return availableColor;
     };
 
+    // cards: while the email and its components are made, the page has the same frame as the finished one with nothing in it:
+    // the subject line and the body box (with its toolbar), the component list and the intents area
+    const renderGeneratingSkeleton = () => (
+        <div className='draft-generating-page' role='status' aria-live='polite'>
+            <style>{`
+                .draft-generating-page .dot { width: 10px; height: 10px; border-radius: 50%; background: #1677ff;
+                    display: inline-block; animation: draft-bounce 1s infinite ease-in-out; }
+                .draft-generating-page .dot:nth-child(2) { animation-delay: 0.15s; }
+                .draft-generating-page .dot:nth-child(3) { animation-delay: 0.3s; }
+                @keyframes draft-bounce {
+                    0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+                    40% { transform: translateY(-6px); opacity: 1; }
+                }
+            `}</style>
+            <Row style={{ borderBottom: '1px solid #d9d9d9', height: '500px', overflow: 'hidden' }}>
+                <Col span={18} style={{ height: '100%' }}>
+                    <div style={{ background: '#f5f6f8', height: '100%', boxSizing: 'border-box', padding: '16px 16px 20px', display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: BOX_BORDER, margin: '0 4px 20px', minHeight: '44px' }}>
+                            <span style={{ color: '#8c8c8c', fontSize: '15px', flex: 'none' }}>Subject:</span>
+                            <div style={{ flex: 1 }} />
+                            <Button size="small" type="text" icon={<CopyOutlined />} disabled style={{ color: '#8c8c8c' }}>Copy</Button>
+                        </div>
+                        <div style={{ flex: 1, background: '#fff', borderRadius: BOX_RADIUS, padding: '0 16px 8px', display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px', padding: '8px 0 6px', margin: '0 0 0 -10px' }}>
+                                {['B', 'I', 'U', '|', 'H1', 'H2', '|', '• List', '1. List'].map((label, i) => label === '|'
+                                    ? <div key={i} style={{ width: '1px', height: '24px', background: '#d9d9d9', margin: '0 8px' }} />
+                                    : <ToolbarButton key={i} compact onMouseDown={(event) => event.preventDefault()}>{label}</ToolbarButton>)}
+                                <span style={{ marginLeft: 'auto' }}>
+                                    <Button size="small" type="text" icon={<CopyOutlined />} disabled style={{ color: '#8c8c8c' }}>Copy</Button>
+                                </span>
+                            </div>
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', color: '#1677ff', fontSize: '20px', fontWeight: 600 }}>
+                                <span style={{ display: 'inline-flex', gap: '7px', alignItems: 'flex-end', height: '18px' }}>
+                                    <span className='dot' />
+                                    <span className='dot' />
+                                    <span className='dot' />
+                                </span>
+                                <span>Generating email and components…</span>
+                            </div>
+                        </div>
+                    </div>
+                </Col>
+                <Col span={6} style={{ height: '100%' }}>
+                    <div style={{ padding: '16px', borderLeft: '1px solid #f0f0f0', background: '#fff', height: '100%', boxSizing: 'border-box' }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '16px', fontSize: '14px', color: '#333', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                            <span>Email Components</span>
+                            <Button size="small" disabled>Regenerate</Button>
+                        </div>
+                    </div>
+                </Col>
+            </Row>
+            <div style={{ padding: '8px 16px', height: '200px' }}>
+                <div style={{ fontWeight: 'bold', fontSize: '16px' }}>Intents</div>
+            </div>
+        </div>
+    );
+
     const showGuide = EXPERIMENT.cond === 'cards' && !!globalUsername && hasDraft && !draftGenerating
-        && components.length === 0 && !guideSeen;
+        && (EXPERIMENT.cond === 'cards' ? components.length > 0 : components.length === 0) && !guideSeen;
 
     // cards condition: intent pills, version cards and the follow-up notice
     const renderCardsIntents = () => {
         const unit = selectedComponentId ? combinedResults.find(component => component.id === selectedComponentId) : null;
         const intents = (unit && unit.linkedIntents) || [];
         const activeDimension = cardsState ? cardsState.dimension : null;
-        const diffRemoved = { background: '#fde8e8', color: '#b42318', textDecoration: 'line-through' };
-        const diffAdded = { background: '#e3f5ea', color: '#137a3e' };
         const retry = () => {
             const intent = intents.find(i => i.dimension === activeDimension);
             if (intent) handleDimensionSelect(intent);
@@ -3042,7 +3510,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 <style>{`
                     .vc-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
                     @media (max-width: 900px) { .vc-grid { grid-template-columns: 1fr; } }
-                    .vc-card { display: flex; flex-direction: column; background: #fff; border: 1px solid #e3e5e8; border-radius: 10px; padding: 14px; }
+                    .vc-card { display: flex; flex-direction: column; background: #fff; border: 1px solid #e3e5e8; border-radius: ${CARD_BORDER_RADIUS}; padding: 14px; }
                     .vc-card:hover { border-color: #b9c7e6; }
                 `}</style>
                 {intents.length === 0 ? (
@@ -3060,7 +3528,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                     style={{
                                         margin: 0,
                                         cursor: 'pointer',
-                                        borderRadius: '10px',
+                                        borderRadius: CARD_BORDER_RADIUS,
                                         padding: '5px 12px',
                                         fontSize: '13px',
                                         border: active ? '1px solid #2f6fde' : '1px solid #e3e5e8',
@@ -3121,9 +3589,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                                 </Tag>
                                             </div>
                                             <div style={{ flex: 1, fontSize: '14px', lineHeight: 1.65, whiteSpace: 'pre-wrap', marginBottom: '14px' }}>
-                                                {item.parts.map((part, index) => (
-                                                    <span key={index} style={part.removed ? diffRemoved : part.added ? diffAdded : undefined}>{part.value}</span>
-                                                ))}
+                                                {renderChangedSentences([unit && unit.content, getUnitNodeText(selectedComponentId, valueRef.current)], item.content)}
                                             </div>
                                             <Button type="primary" block onClick={() => handleCardUse(item)}>Use</Button>
                                         </div>
@@ -3145,6 +3611,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
     // 4. 修改后的renderLeaf函数 - 每个component都显示dimension圆圈
     const renderLeaf = ({ attributes, children, leaf }) => {
+        // cards: the "Subject:" prefix stays in the text but is not shown (the box title says it)
+        if (leaf.subjectPrefix) return <span {...attributes} style={{ display: 'none' }}>{children}</span>;
         let element = children;
         
         if (leaf.bold) {
@@ -3161,14 +3629,15 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         const hasDimensions = leaf.hasDimensions && leaf.linkedIntents && leaf.linkedIntents.length > 0;
         const isHighlighted = leaf.highlight;
 
-        if (hasDimensions || isHighlighted) {
+        const isCards = EXPERIMENT.cond === 'cards';
+        // cards: every unit is clickable, also one without intents
+        if (hasDimensions || isHighlighted || (isCards && leaf.componentId)) {
             // 根据是否高亮设置不同的文本样式
-            const isCards = EXPERIMENT.cond === 'cards';
             const textStyle = isHighlighted && isCards ? {
                 backgroundColor: '#fff3c4',
                 borderRadius: '4px',
                 padding: '1px 2px',
-                cursor: 'pointer'
+                cursor: 'text'
             } : isHighlighted ? {
                 backgroundColor: '#fff3cd',
                 borderRadius: '2px',
@@ -3183,10 +3652,13 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     <span
                         {...attributes}
                         style={textStyle}
+                        className={isCards && leaf.componentId ? `unit-leaf${isHighlighted ? ' unit-selected' : ''}` : undefined}
+                        data-unit={isCards && leaf.componentId ? leaf.componentId : undefined}
                         onClick={leaf.componentId ? (e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            handleHighlightClick(e, leaf.componentId);
+                            if (isCards) handleUnitClick(e, leaf.componentId);
+                            else handleHighlightClick(e, leaf.componentId);
                         } : undefined}
                     >
                         {element}
@@ -3230,8 +3702,8 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             return;
         }
 
-        // Check if there was a previous modification and show modal
-        if (lastModifiedComponent && lastModifiedComponent.componentId !== componentId) {
+        // Check if there was a previous modification and show modal (cards: no modification record is asked for)
+        if (EXPERIMENT.cond !== 'cards' && lastModifiedComponent && lastModifiedComponent.componentId !== componentId) {
             setChangeModal({
                 visible: true,
                 oldContent: lastModifiedComponent.oldContent,
@@ -3390,6 +3862,471 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         }
     };
 
+    // cards: "Describe changes" box under a text selection. It opens only for a selection inside one unit, the rewrite is
+    // previewed first, and accepting replaces just the selected words of that unit.
+    const closeRewriteBox = () => {
+        const open = rewriteBoxStateRef.current;
+        if (open && open.status === 'preview') {
+            logEvent({ unit_id: open.unitId, unit_title: open.unitTitle, event: 'selection_rewrite_discarded', selected_text: open.selectedText, prompt: open.prompt, new_text: open.newText, trigger: open.trigger || 'selection' });
+        }
+        rewriteRequestRef.current += 1;
+        try {
+            if (window.CSS && window.CSS.highlights) window.CSS.highlights.delete('rewrite-selection');
+        } catch (error) {
+            console.warn('Could not clear the selection highlight:', error);
+        }
+        setRewriteBox(null);
+    };
+    closeRewriteBoxRef.current = closeRewriteBox;
+
+    const evaluateSelectionForRewrite = (event) => {
+        if (EXPERIMENT.cond !== 'cards') return;
+        if (event && rewriteBoxElementRef.current && rewriteBoxElementRef.current.contains(event.target)) return;
+        const dismiss = () => { if (rewriteBoxStateRef.current) closeRewriteBox(); };
+        const scroller = editorScrollRef.current;
+        const domSelection = window.getSelection();
+        if (!scroller || !domSelection || domSelection.rangeCount === 0 || domSelection.isCollapsed) { dismiss(); return; }
+        const domRange = domSelection.getRangeAt(0);
+        const editable = scroller.querySelector('[data-slate-editor="true"]');
+        if (!editable || !editable.contains(domRange.commonAncestorContainer)) { dismiss(); return; }
+
+        let range = null;
+        try {
+            range = ReactEditor.toSlateRange(editor, domSelection, { exactMatch: false, suppressThrow: true });
+        } catch (error) {
+            range = null;
+        }
+        if (!range || Range.isCollapsed(range)) { dismiss(); return; }
+        const [start, end] = Range.edges(range);
+        const startBlock = start.path[0];
+        const endBlock = end.path[0];
+        const multi = startBlock !== endBlock;
+        const blockTexts = editor.children.map(node => getNodeText(null, node));
+        const offsetIn = (index, point) => Editor.string(editor, { anchor: Editor.start(editor, [index]), focus: point }).length;
+        const startOffset = offsetIn(startBlock, start);
+        const endOffset = offsetIn(endBlock, end);
+        const selectedText = multi ? joinSelectedBlocks(blockTexts, startBlock, startOffset, endBlock, endOffset) : Editor.string(editor, range);
+        if (selectedText.replace(/\s/g, '').length < 2) { dismiss(); return; }
+
+        let unit = null;
+        let startIndex = 0;
+        let overlapIds = [];
+        const beforeSelection = startOffset;
+        if (multi) {
+            // A selection across paragraphs: the words are replaced in the draft itself; every section it touches is cleared then
+            overlapIds = components.filter(c => {
+                if (!c.content) return false;
+                for (let i = startBlock; i <= endBlock; i++) {
+                    const at = blockTexts[i].indexOf(c.content);
+                    if (at < 0) continue;
+                    const from = i === startBlock ? startOffset : 0;
+                    const to = i === endBlock ? endOffset : blockTexts[i].length;
+                    if (at < to && at + c.content.length > from) return true;
+                }
+                return false;
+            }).map(c => c.id);
+        } else {
+            // The unit is found from where the selection lies in the paragraph's text, not from the leaves: after a replacement
+            // the whole paragraph is one leaf. The selection must lie completely inside one unit.
+            const blockText = blockTexts[startBlock];
+            const unitAt = (point) => {
+                try {
+                    const [leaf] = Editor.leaf(editor, point);
+                    return (leaf && leaf.componentId) || null;
+                } catch (error) {
+                    return null;
+                }
+            };
+            const inside = components.filter(c => {
+                const at = blockText.indexOf(c.content);
+                return c.content && at >= 0 && beforeSelection >= at && beforeSelection + selectedText.length <= at + c.content.length;
+            });
+            if (blockText.slice(beforeSelection, beforeSelection + selectedText.length) !== selectedText) { dismiss(); return; }
+            unit = inside.length === 1 ? inside[0] : inside.find(c => c.id === unitAt(start)) || null;
+            if (unit) {
+                startIndex = beforeSelection - blockText.indexOf(unit.content);
+                if (unit.content.slice(startIndex, startIndex + selectedText.length) !== selectedText) unit = null;
+            }
+            // No single unit holds the selection (no sections yet, text between sections, or a selection across sections): the
+            // words are replaced in the draft itself. Units the selection touches no longer match the text then.
+            overlapIds = unit ? [] : components.filter(c => {
+                const at = blockText.indexOf(c.content);
+                return c.content && at >= 0 && beforeSelection < at + c.content.length && beforeSelection + selectedText.length > at;
+            }).map(c => c.id);
+        }
+
+        // Under the last selected line, relative to the scrolling editor area (above the first line when there is no room below)
+        const rects = domRange.getClientRects();
+        const first = rects.length ? rects[0] : domRange.getBoundingClientRect();
+        const last = rects.length ? rects[rects.length - 1] : first;
+        const area = scroller.getBoundingClientRect();
+        const width = Math.min(460, scroller.clientWidth - 16);
+        const below = last.bottom - area.top + scroller.scrollTop + 6;
+        const noRoomBelow = last.bottom + 80 > area.bottom && first.top - area.top > 80;
+        const top = noRoomBelow ? first.top - area.top + scroller.scrollTop - 62 : below;
+        const left = Math.max(8, Math.min(last.left - area.left + scroller.scrollLeft, scroller.clientWidth - width - 8));
+
+        try {
+            if (window.CSS && window.CSS.highlights && window.Highlight) {
+                window.CSS.highlights.set('rewrite-selection', new window.Highlight(domRange.cloneRange()));
+            }
+        } catch (error) {
+            console.warn('Could not highlight the selection:', error);
+        }
+        // Slate learns about a new DOM selection a moment late, and a render before that would put its older selection back
+        // (the selection would lose its last characters): make Slate's selection the one the writer made
+        try {
+            if (!editor.selection || !Range.equals(editor.selection, range)) Transforms.select(editor, range);
+        } catch (error) {
+            console.warn('Could not sync the editor selection:', error);
+        }
+        rewriteRequestRef.current += 1;
+        setRewriteBox({
+            top, left, width, mode: unit ? 'unit' : 'text', unitId: unit ? unit.id : null, unitTitle: unit ? unit.title : 'Draft',
+            selectedText, startIndex, range: { anchor: start, focus: end }, blockIndex: startBlock, blockOffset: beforeSelection, overlapIds,
+            multi, startBlock, startOffset, endBlock, endOffset,
+            prompt: '', status: 'input', newText: '', errorMessage: '', requestedAt: null
+        });
+    };
+
+    // cards: a click on a unit (the text that carries sections and intents) opens the box for the whole unit, under its last line
+    const openUnitRewriteBox = (event, componentId) => {
+        const domSelection = window.getSelection();
+        if (domSelection && !domSelection.isCollapsed) return; // the click that ends a drag selection
+        const unit = components.find(c => c.id === componentId);
+        const scroller = editorScrollRef.current;
+        const element = event.currentTarget;
+        if (!unit || !unit.content || !scroller || !element) return;
+        // Slate ignores selection changes while the editor is not focused, so it may not know the new caret yet, and the render
+        // below would put its older selection back (typing would then replace text selected earlier): hand it the caret
+        if (domSelection && domSelection.rangeCount > 0) {
+            try {
+                const caret = ReactEditor.toSlateRange(editor, domSelection, { exactMatch: false, suppressThrow: true });
+                if (caret && (!editor.selection || !Range.equals(editor.selection, caret))) Transforms.select(editor, caret);
+            } catch (error) {
+                console.warn('Could not sync the editor selection:', error);
+            }
+        }
+        const rects = element.getClientRects();
+        const first = rects.length ? rects[0] : element.getBoundingClientRect();
+        const last = rects.length ? rects[rects.length - 1] : first;
+        const area = scroller.getBoundingClientRect();
+        const width = Math.min(460, scroller.clientWidth - 16);
+        const noRoomBelow = last.bottom + 80 > area.bottom && first.top - area.top > 80;
+        const top = noRoomBelow ? first.top - area.top + scroller.scrollTop - 62 : last.bottom - area.top + scroller.scrollTop + 6;
+        const left = Math.max(8, Math.min(last.left - area.left + scroller.scrollLeft, scroller.clientWidth - width - 8));
+        try {
+            if (window.CSS && window.CSS.highlights && window.Highlight) {
+                const range = document.createRange();
+                range.selectNodeContents(element);
+                window.CSS.highlights.set('rewrite-selection', new window.Highlight(range));
+            }
+        } catch (error) {
+            console.warn('Could not highlight the unit:', error);
+        }
+        rewriteRequestRef.current += 1;
+        setRewriteBox({
+            top, left, width, mode: 'unit', trigger: 'click', unitId: unit.id, unitTitle: unit.title,
+            selectedText: unit.content, startIndex: 0, range: null, blockIndex: null, blockOffset: null, overlapIds: [],
+            prompt: '', status: 'input', newText: '', errorMessage: '', requestedAt: null
+        });
+    };
+
+    // cards: first click on a unit highlights and selects it (its intents show on the right); a click on the highlighted unit opens the box
+    const handleUnitClick = (event, componentId) => {
+        const domSelection = window.getSelection();
+        if (domSelection && !domSelection.isCollapsed) return; // the click that ends a drag selection: the box of the selection handles it
+        const component = components.find(c => c.id === componentId);
+        if (!component) return;
+        if (selectedComponentId !== componentId) {
+            closeRewriteBox();
+            // Remember which character was clicked: selecting the unit remounts the editor and the caret would be lost
+            try {
+                const hit = document.caretRangeFromPoint ? document.caretRangeFromPoint(event.clientX, event.clientY) : null;
+                if (hit) {
+                    const point = ReactEditor.toSlatePoint(editor, [hit.startContainer, hit.startOffset], { exactMatch: false, suppressThrow: true });
+                    if (point && point.path.length === 2) pendingCaretRef.current = { block: point.path[0], offset: blockOffsetOf(point) };
+                }
+            } catch (error) {
+                pendingCaretRef.current = null;
+            }
+            logEvent({ unit_id: component.id, unit_title: component.title, event: 'unit_click_select' });
+            handleComponentSelect(component);
+            return;
+        }
+        openUnitRewriteBox(event, componentId);
+    };
+
+    // cards: the unit under the mouse gets a light tint (all of its spans). This is done on the DOM and not with React state: a render
+    // while the writer drags a selection would let Slate put its older selection back.
+    const setUnitHover = (unitId) => {
+        hoveredUnitRef.current = unitId;
+        const scroller = editorScrollRef.current;
+        if (!scroller) return;
+        scroller.querySelectorAll('.unit-hover').forEach(element => element.classList.remove('unit-hover'));
+        if (!unitId) return;
+        scroller.querySelectorAll(`[data-unit="${window.CSS && window.CSS.escape ? window.CSS.escape(unitId) : unitId}"]`)
+            .forEach(element => element.classList.add('unit-hover'));
+    };
+    // mousemove and not mouseover: a render or a remount of the editor (a click that selects a unit) drops the tint while the mouse
+    // stays on the unit, and no mouseover comes then; the next small move puts it back
+    const handleUnitMouseMove = (event) => {
+        if (EXPERIMENT.cond !== 'cards') return;
+        const element = event.target && event.target.closest ? event.target.closest('[data-unit]') : null;
+        const unitId = element ? element.getAttribute('data-unit') : null;
+        if (unitId === hoveredUnitRef.current && (!unitId || element.classList.contains('unit-hover'))) return;
+        setUnitHover(unitId);
+    };
+
+    // cards: an AI rewrite remounts the editor, so Slate's own history cannot take it back. The state from before it is kept here;
+    // manual edits made after it are undone first (Slate's history), then the rewrite.
+    const takeSnapshot = () => ({ value: editor.children, components, combinedResults, originalText, selectedComponentId });
+    const pushUndo = (snapshot) => {
+        const history = aiHistoryRef.current;
+        history.undos.push(snapshot);
+        if (history.undos.length > 20) history.undos.shift();
+        history.redos = [];
+    };
+    const restoreSnapshot = (snapshot, kind) => {
+        deselectEditor();
+        const draft = snapshot.value.map(node => getNodeText(null, node)).filter(text => text.trim()).join('\n\n');
+        // Slate reports the deselect a moment later with the old content: the restored content has to come after that report
+        setTimeout(() => {
+            setValue(snapshot.value);
+            setEditorKey(prev => prev + 1);
+        }, 0);
+        setComponents(snapshot.components);
+        setCombinedResults(snapshot.combinedResults);
+        setOriginalText(snapshot.originalText);
+        setSelectedComponentId(snapshot.selectedComponentId);
+        cardsRef.current = null;
+        setCardsState(null);
+        axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: draft })
+            .catch(error => console.error('Error saving draft to sessionData:', error));
+        logEvent({ event: kind === 'redo' ? 'selection_rewrite_redone' : 'selection_rewrite_undone' });
+    };
+    // Returns true when something was undone or redone
+    const undoOrRedo = (redo) => {
+        const slateHistory = editor.history;
+        if (slateHistory && (redo ? slateHistory.redos.length : slateHistory.undos.length)) {
+            if (redo) editor.redo();
+            else editor.undo();
+            return true;
+        }
+        const history = aiHistoryRef.current;
+        const from = redo ? history.redos : history.undos;
+        const to = redo ? history.undos : history.redos;
+        if (from.length === 0) return false;
+        const snapshot = from.pop();
+        to.push(takeSnapshot());
+        restoreSnapshot(snapshot, redo ? 'redo' : 'undo');
+        return true;
+    };
+    undoRedoRef.current = undoOrRedo;
+
+    // Shift+arrows, select all and similar keys also change the selection
+    const handleSelectionKeyUp = (event) => {
+        const moves = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key);
+        if (event.shiftKey || moves || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a')) {
+            evaluateSelectionForRewrite(event);
+        }
+    };
+
+    const submitRewrite = async () => {
+        const box = rewriteBoxStateRef.current;
+        if (!box || !box.prompt.trim() || box.status === 'loading') return;
+        const requestId = rewriteRequestRef.current + 1;
+        rewriteRequestRef.current = requestId;
+        setRewriteBox(prev => prev && { ...prev, status: 'loading', errorMessage: '', requestedAt: Date.now() });
+        logEvent({ unit_id: box.unitId, unit_title: box.unitTitle, event: 'selection_rewrite_requested', selected_text: box.selectedText, prompt: box.prompt, trigger: box.trigger || 'selection' });
+        try {
+            const response = await axios.post('http://localhost:3001/ai-generate-rewrite', {
+                userTask,
+                userName: globalUsername,
+                taskId: globalTaskId,
+                selectedContent: box.selectedText,
+                userPrompt: box.prompt
+            });
+            if (requestId !== rewriteRequestRef.current) return;
+            // Line breaks inside a unit would throw off the position search; across paragraphs they stay as paragraph breaks
+            const answer = String(response.data.rewrittenContent || '').replace(/\r/g, '');
+            const rewritten = box.multi
+                ? answer.split(/\s*\n+\s*/).map(part => part.trim()).filter(Boolean).join('\n\n')
+                : answer.replace(/\s*\n+\s*/g, ' ').trim();
+            if (!rewritten) throw new Error('The rewrite was empty');
+            setRewriteBox(prev => prev && { ...prev, status: 'preview', newText: rewritten });
+        } catch (error) {
+            if (requestId !== rewriteRequestRef.current) return;
+            console.error('Failed to rewrite the selection:', error);
+            setRewriteBox(prev => prev && { ...prev, status: 'error', errorMessage: 'Could not rewrite this. Please try again.' });
+        }
+    };
+
+    const acceptRewrite = () => {
+        const box = rewriteBoxStateRef.current;
+        if (!box || box.status !== 'preview') return;
+        const { selectedText, startIndex, newText, prompt } = box;
+        const clearHighlight = () => {
+            try {
+                if (window.CSS && window.CSS.highlights) window.CSS.highlights.delete('rewrite-selection');
+            } catch (error) {
+                console.warn('Could not clear the selection highlight:', error);
+            }
+        };
+        const finish = (extra) => logEvent({
+            unit_id: box.unitId, unit_title: box.unitTitle, event: 'selection_rewrite_applied', selected_text: selectedText, prompt,
+            new_text: newText, duration_ms: box.requestedAt ? Date.now() - box.requestedAt : null, mode: box.mode, trigger: box.trigger || 'selection', ...extra
+        });
+        const draftOf = (blocks) => blocks.filter(text => text.trim()).join('\n\n');
+        const saveDraft = (draft) => axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: draft })
+            .catch(error => console.error('Error saving draft to sessionData:', error));
+
+        if (box.mode === 'unit') {
+            const unit = components.find(c => c.id === box.unitId);
+            if (!unit || unit.content.slice(startIndex, startIndex + selectedText.length) !== selectedText) {
+                message.warning('The text changed since it was selected. Please select it again.');
+                closeRewriteBox();
+                return;
+            }
+            const newContent = unit.content.slice(0, startIndex) + newText + unit.content.slice(startIndex + selectedText.length);
+            rewriteRequestRef.current += 1;
+            clearHighlight();
+            setRewriteBox(null);
+            rewriteBoxStateRef.current = null;
+            deselectEditor();
+            const snapshot = takeSnapshot();
+            if (!replaceComponentText(unit.id, newContent)) return;
+            pushUndo(snapshot);
+            // Cards that were built from the old text would overwrite this edit if used; they are dropped without touching the model
+            let cardsDismissed = false;
+            if (cardsRef.current && cardsRef.current.unitId === unit.id) {
+                cardsRef.current = null;
+                setCardsState(null);
+                cardsDismissed = true;
+            }
+            finish({ cards_dismissed: cardsDismissed });
+            return;
+        }
+
+        if (box.multi) {
+            // A selection across paragraphs: the paragraphs it covers are rebuilt from the new text
+            const blocks = editor.children.map(node => getNodeText(null, node));
+            if (joinSelectedBlocks(blocks, box.startBlock, box.startOffset, box.endBlock, box.endOffset) !== selectedText) {
+                message.warning('The text changed since it was selected. Please select it again.');
+                closeRewriteBox();
+                return;
+            }
+            rewriteRequestRef.current += 1;
+            clearHighlight();
+            setRewriteBox(null);
+            rewriteBoxStateRef.current = null;
+            const snapshot = takeSnapshot();
+            const merged = blocks[box.startBlock].slice(0, box.startOffset) + newText + blocks[box.endBlock].slice(box.endOffset);
+            const draft = draftOf([...blocks.slice(0, box.startBlock), merged, ...blocks.slice(box.endBlock + 1)]);
+            cardsRef.current = null;
+            setCardsState(null);
+            applyDraftText(draft);
+            saveDraft(draft);
+            pushUndo(snapshot);
+            if (box.overlapIds.length > 0) message.info('The edit reaches into sections, so the sections were cleared. Click Regenerate to refresh them.');
+            finish({ sections_cleared: box.overlapIds.length > 0, paragraphs: box.endBlock - box.startBlock + 1 });
+            return;
+        }
+
+        // The selection must still hold the same words
+        let current = null;
+        try {
+            current = Editor.string(editor, box.range);
+        } catch (error) {
+            current = null;
+        }
+        if (current !== selectedText) {
+            message.warning('The text changed since it was selected. Please select it again.');
+            closeRewriteBox();
+            return;
+        }
+        rewriteRequestRef.current += 1;
+        clearHighlight();
+        setRewriteBox(null);
+        rewriteBoxStateRef.current = null; // applyDraftText closes the box too; this accept must not be logged as a discard
+        if (box.overlapIds.length > 0) {
+            // The edit reaches into sections: write the new draft and let the sections be generated again, as for any whole-draft change
+            const blocks = editor.children.map(node => getNodeText(null, node));
+            const text = blocks[box.blockIndex];
+            blocks[box.blockIndex] = text.slice(0, box.blockOffset) + newText + text.slice(box.blockOffset + selectedText.length);
+            const draft = draftOf(blocks);
+            const snapshot = takeSnapshot();
+            cardsRef.current = null;
+            setCardsState(null);
+            applyDraftText(draft);
+            saveDraft(draft);
+            pushUndo(snapshot);
+            message.info('The edit reaches into sections, so the sections were cleared. Click Regenerate to refresh them.');
+        } else {
+            deselectEditor();
+            Transforms.insertText(editor, newText, { at: box.range });
+            const draft = draftOf(editor.children.map(node => getNodeText(null, node)));
+            setOriginalText(draft);
+            saveDraft(draft);
+        }
+        finish({ sections_cleared: box.overlapIds.length > 0 });
+    };
+
+    // cards: put the tint back after a render that rewrote the class names (DOM only, no state)
+    useEffect(() => {
+        if (EXPERIMENT.cond !== 'cards' || !hoveredUnitRef.current || !editorScrollRef.current) return;
+        const id = hoveredUnitRef.current;
+        editorScrollRef.current.querySelectorAll(`[data-unit="${window.CSS && window.CSS.escape ? window.CSS.escape(id) : id}"]`)
+            .forEach(element => element.classList.add('unit-hover'));
+    });
+
+    // cards: Ctrl/Cmd+Z and Shift+Z / Y also work when the keyboard focus is on the page and not in a field
+    useEffect(() => {
+        if (EXPERIMENT.cond !== 'cards') return undefined;
+        const onKeyDown = (event) => {
+            if (!(event.metaKey || event.ctrlKey)) return;
+            const key = event.key.toLowerCase();
+            if (key !== 'z' && key !== 'y') return;
+            const target = event.target;
+            const inField = target && target.closest && target.closest('input, textarea, select, [contenteditable="true"]');
+            if (inField) return; // a field keeps its own undo; the editor handles the keys itself
+            event.preventDefault();
+            undoRedoRef.current(key === 'y' || event.shiftKey);
+        };
+        document.addEventListener('keydown', onKeyDown);
+        return () => document.removeEventListener('keydown', onKeyDown);
+    }, []);
+
+    // A click outside the box or Esc closes it
+    const rewriteBoxOpen = rewriteBox !== null;
+    useEffect(() => {
+        if (!rewriteBoxOpen) return undefined;
+        const onMouseDown = (event) => {
+            if (rewriteBoxElementRef.current && rewriteBoxElementRef.current.contains(event.target)) return;
+            closeRewriteBoxRef.current();
+        };
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                closeRewriteBoxRef.current();
+                return;
+            }
+            // Typing, deleting or pasting in the editor changes the selected words by hand: the box gives way
+            const inEditor = event.target && event.target.closest && event.target.closest('[data-slate-editor="true"]');
+            if (!inEditor) return;
+            const command = event.metaKey || event.ctrlKey;
+            const edits = command
+                ? ['v', 'x', 'z', 'y'].includes(event.key.toLowerCase())
+                : event.key.length === 1 || ['Enter', 'Backspace', 'Delete', 'Tab'].includes(event.key);
+            if (edits) closeRewriteBoxRef.current();
+        };
+        document.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('keydown', onKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', onMouseDown);
+            document.removeEventListener('keydown', onKeyDown);
+        };
+    }, [rewriteBoxOpen]);
+
     // Modal handlers
     const handleModalSave = async () => {
         console.log('Saving modification with reason:', modificationReason);
@@ -3536,10 +4473,12 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
     // capture phase, so the leave is logged before the button's own handler changes anything.
     useEffect(() => {
         if (EXPERIMENT.cond !== 'cards') return undefined;
-        const leaveButtons = ['Generate Components', 'Reset Editor', 'New Task'];
+        // The buttons are told apart by a mark and not by their text: the "Regenerate" of the version cards has the same text as the
+        // one for the components, and it must not end the display it works on
+        const leaveButtons = ['New Task'];
         const handleClick = (event) => {
             const button = event.target && event.target.closest ? event.target.closest('button') : null;
-            if (!button || !leaveButtons.includes((button.innerText || '').trim())) return;
+            if (!button || !(button.dataset.leaveCards === 'true' || leaveButtons.includes((button.innerText || '').trim()))) return;
             if (cardsRef.current) flushLeave();
         };
         document.addEventListener('click', handleClick, true);
@@ -3652,8 +4591,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         if (cardsRequestIdRef.current !== requestId) return null; // user already moved on
         const items = chosenVersions.map(v => ({
             value: v.intent_value,
-            content: v.content,
-            parts: diffWords(unit.content, v.content)
+            content: v.content
         }));
         if (items.length === 0) return 'empty';
         // Every candidate that went to /rank, with its position among the shown cards (null if not shown), for offline replay
@@ -3730,6 +4668,19 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             showError();
         }
     };
+
+    // cards: when a unit is selected its first intent is opened right away (the versions are generated and show "Generating versions…")
+    const dimensionSelectRef = useRef(handleDimensionSelect);
+    dimensionSelectRef.current = handleDimensionSelect;
+    useEffect(() => {
+        if (EXPERIMENT.cond !== 'cards' || !selectedComponentId) return;
+        const unit = combinedResultsRef.current.find(component => component.id === selectedComponentId);
+        const first = unit && unit.linkedIntents && unit.linkedIntents[0];
+        if (!first) return;
+        const open = cardsRef.current;
+        if (open && open.unitId === selectedComponentId) return;
+        dimensionSelectRef.current(first);
+    }, [selectedComponentId]);
 
     // cards: after Use, log edit_done when the cursor leaves the unit and its text was changed (analysis only)
     const finishEditWatch = () => {
@@ -4303,11 +5254,40 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
     // Handle keyboard shortcuts
     const handleKeyDown = (event) => {
+        if (EXPERIMENT.cond === 'cards' && editor.selection && Range.isCollapsed(editor.selection)) {
+            const layout = sectionLayout();
+            const anchor = editor.selection.anchor;
+            if (layout && layout.subjectIndex === anchor.path[0] && anchor.path.length === 2) {
+                const prefix = SUBJECT_PATTERN.exec(layout.texts[layout.subjectIndex]);
+                const offset = blockOffsetOf(anchor);
+                if (prefix && offset <= prefix[0].length) {
+                    if (event.key === 'Backspace' || event.key === 'ArrowLeft') {
+                        if (offset === prefix[0].length) event.preventDefault(); // the hidden prefix cannot be deleted or entered
+                    }
+                    if (offset < prefix[0].length) {
+                        let remaining = prefix[0].length;
+                        const block = editor.children[layout.subjectIndex];
+                        for (let i = 0; i < block.children.length; i++) {
+                            const length = block.children[i].text ? block.children[i].text.length : 0;
+                            if (remaining <= length) { Transforms.select(editor, { path: [layout.subjectIndex, i], offset: remaining }); break; }
+                            remaining -= length;
+                        }
+                    }
+                }
+            }
+        }
         if (!event.ctrlKey && !event.metaKey) {
             return;
         }
 
-        switch (event.key) {
+        switch (event.key.toLowerCase()) {
+            case 'z':
+            case 'y': {
+                if (typeof editor.undo !== 'function') break;
+                event.preventDefault();
+                undoOrRedo(event.key.toLowerCase() === 'y' || event.shiftKey);
+                break;
+            }
             case 'b': {
                 event.preventDefault();
                 toggleFormat(editor, 'bold');
@@ -4375,14 +5355,25 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
 
             console.log('Combined Result:', combinedResult);
             setCombinedResults(combinedResult); // Store in state
+            if (EXPERIMENT.cond === 'cards') {
+                // Both are ready: the component list and the intents appear together
+                setComponents(commonComponents);
+                message.success(`Extracted ${commonComponents.length} components`);
+            }
              // 初始化所有dimension标记
-            setTimeout(() => {
-                if (combinedResult.length > 0) {
-                    initializeAllDimensionsWithResults(combinedResult);
-                }
-            }, 100);
+            if (EXPERIMENT.cond === 'cards') {
+                if (combinedResult.length > 0) initializeAllDimensionsWithResults(combinedResult);
+            } else {
+                setTimeout(() => {
+                    if (combinedResult.length > 0) {
+                        initializeAllDimensionsWithResults(combinedResult);
+                    }
+                }, 100);
+            }
+            return true;
         } catch (error) {
             console.error('Error processing combined result:', error);
+            return false;
         }
     };
 
@@ -4393,11 +5384,14 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
             return;
         }
 
-        let newValue = [...value];
+        // The latest editor content (this may run from a render older than the draft it marks)
+        let newValue = [...(EXPERIMENT.cond === 'cards' ? valueRef.current : value)];
         
         // 为每个component添加dimension标记
         results.forEach(component => {
-            if (component.linkedIntents && component.linkedIntents.length > 0) {
+            if (EXPERIMENT.cond === 'cards') {
+                newValue = markUnitInValue(newValue, component.content, component.id, component.linkedIntents || []);
+            } else if (component.linkedIntents && component.linkedIntents.length > 0) {
                 newValue = addDimensionsToValue(newValue, component.content, component.id, component.linkedIntents);
             }
         });
@@ -4504,6 +5498,16 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         >
             <FactorPanel
                 variant="sidebar"
+                cardsLayout={EXPERIMENT.cond === 'cards'}
+                topSlot={EXPERIMENT.cond === 'cards' ? (
+                    <PlaceholderTable
+                        rows={draftGenerating ? [] : placeholders.map(field => ({ key: field.key, placeholder: `[${field.label}]`, value: placeholderValues[field.key] || '' }))}
+                        generating={draftGenerating}
+                        onChange={(key, text) => setPlaceholderValues(prev => ({ ...prev, [key]: text }))}
+                        onClearAll={() => setPlaceholderValues({})}
+                        canClear={!draftGenerating && Object.values(placeholderValues).some(text => text)}
+                    />
+                ) : null}
                 selection={factorSelection}
                 userTask={userTask}
                 hasDraft={hasDraft}
@@ -4535,11 +5539,13 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 height: 'calc(100vh - 64px)',
                 overflowY: 'auto',
                 padding: '24px',
+                background: EXPERIMENT.cond === 'cards' ? '#fff' : undefined,
             }}
         >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0, ...(EXPERIMENT.cond === 'cards' ? { height: '40px' } : {}) }}>
                 <div style={{ fontSize: '24px', fontWeight: 'bold' }}>Email Draft Editor</div>
                 <div style={{ display: 'flex', gap: '8px' }}>
+                    {EXPERIMENT.cond !== 'cards' && (
                     <Button
                         ref={generateButtonRef}
                         onClick={() => {
@@ -4551,9 +5557,12 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     >
                         Generate Components
                     </Button>
+                    )}
+                    {EXPERIMENT.cond !== 'cards' && (
                     <Button onClick={safeResetEditor} danger>
                         Reset Editor
                     </Button>
+                    )}
                 </div>
             </div>
             
@@ -4571,7 +5580,9 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 mask={{ color: 'rgba(0, 0, 0, 0.25)' }}
                 steps={[{
                     target: () => generateButtonRef.current,
-                    description: 'Click to split your email into parts and see the writing choices behind each part.',
+                    description: EXPERIMENT.cond === 'cards'
+                        ? 'After editing the email, click Regenerate to refresh the components.'
+                        : 'Click to split your email into parts and see the writing choices behind each part.',
                     placement: 'bottomRight',
                     closeIcon: false,
                     nextButtonProps: { children: 'Got it' }
@@ -4595,7 +5606,10 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                 }}
             >
                 {contentLoaded ? (
-                    <div>
+                    <>
+                    {/* cards: while the email and its components are made, the page shows nothing else (the old page stays hidden, not unmounted) */}
+                    {EXPERIMENT.cond === 'cards' && draftGenerating && renderGeneratingSkeleton()}
+                    <div style={EXPERIMENT.cond === 'cards' && draftGenerating ? { display: 'none' } : undefined}>
                     <Row style={{ 
                         borderBottom: '1px solid #d9d9d9',
                         height: '500px',
@@ -4653,14 +5667,34 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                         }
                                     }}
                                 >
-                                    <Toolbar />
+                                    {(EXPERIMENT.cond !== 'cards' || !value.some(node => getNodeText(null, node).trim())) && <Toolbar />}
+                                    <EditorFrame {...frameProps}>
+                                    {EXPERIMENT.cond === 'cards' && <div className='card-bg' />}
+                                    {EXPERIMENT.cond === 'cards' && <OverlayScrollbar scrollerRef={editorScrollRef} />}
                                     <div style={{ 
                                         flex: 1, 
                                         minHeight: 0,
                                         overflow: 'auto',
                                         position: 'relative'
-                                    }}>
-                                        {draftGenerating && (
+                                    }}
+                                    className={EXPERIMENT.cond === 'cards' ? 'email-scroll' : undefined}
+                                    ref={editorScrollRef}
+                                    onMouseUp={evaluateSelectionForRewrite}
+                                    onKeyUp={handleSelectionKeyUp}
+                                    onMouseMove={handleUnitMouseMove}
+                                    onMouseLeave={() => { if (EXPERIMENT.cond === 'cards') setUnitHover(null); }}
+                                    >
+                                        {EXPERIMENT.cond === 'cards' && (
+                                            <style>{`
+                                                .unit-leaf.unit-hover:not(.unit-selected) { background-color: #fff8e1; border-radius: 4px; }
+                                                .subject-row p { margin: 0; }
+                                                /* the white card with its border, drawn behind the scroller from the subject line down */
+                                                .card-bg { position: absolute; left: 16px; right: 16px; bottom: 20px; top: calc(16px + var(--card-top, 0px));
+                                                    border-radius: ${BOX_RADIUS}px; background: #fff; box-sizing: border-box; pointer-events: none; }
+                                                .card-frame[data-card="0"] .card-bg { display: none; }
+                                            `}</style>
+                                        )}
+                                        {draftGenerating && EXPERIMENT.cond !== 'cards' && (
                                             <div className='draft-generating' role='status' aria-live='polite'>
                                                 <style>{`
                                                     .draft-generating { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center;
@@ -4686,9 +5720,20 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                         <Editable
                                             renderElement={renderElement}
                                             renderLeaf={renderLeaf}
+                                            decorate={EXPERIMENT.cond === 'cards' ? decorateSubjectPrefix : undefined}
                                             onKeyDown={handleKeyDown}
                                             placeholder={loading ? 'Loading...' : draftGenerating ? '' : hasDraft ? 'Start typing...' : 'Select your options in the left sidebar, then click "Generate Email Draft".'}
-                                            style={{
+                                            style={EXPERIMENT.cond === 'cards' ? {
+                                                // the last paragraph's box grows to the bottom (the frame around the scroller leaves 20px below it, the same
+                                                // as between the subject line and the box)
+                                                padding: 0,
+                                                boxSizing: 'border-box',
+                                                minHeight: '100%',
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                outline: 'none',
+                                                lineHeight: '2.0',
+                                            } : {
                                                 padding: '16px',
                                                 minHeight: '400px',
                                                 outline: 'none',
@@ -4698,7 +5743,25 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                                 console.error('Slate editor error:', error);
                                             }}
                                         />
+                                        {EXPERIMENT.cond === 'cards' && rewriteBox && (
+                                            <SelectionRewriteBox
+                                                ref={rewriteBoxElementRef}
+                                                top={rewriteBox.top}
+                                                left={rewriteBox.left}
+                                                width={rewriteBox.width}
+                                                status={rewriteBox.status}
+                                                prompt={rewriteBox.prompt}
+                                                onPromptChange={(text) => setRewriteBox(prev => prev && { ...prev, prompt: text })}
+                                                onSubmit={submitRewrite}
+                                                newText={rewriteBox.newText}
+                                                errorMessage={rewriteBox.errorMessage}
+                                                notice={rewriteBox.overlapIds && rewriteBox.overlapIds.length > 0 ? 'This reaches into sections; accepting clears the sections list.' : ''}
+                                                onAccept={acceptRewrite}
+                                                onDiscard={closeRewriteBox}
+                                            />
+                                        )}
                                     </div>
+                                    </EditorFrame>
                                 </Slate>
 
                                 {/* Ask AI to add content */}
@@ -4725,7 +5788,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                 )}
 
                                 {/* Floating Toolbar */}
-                                {floatingToolbar.visible && (
+                                {floatingToolbar.visible && EXPERIMENT.cond !== 'cards' && (
                                     <FloatingToolbar
                                         component={floatingToolbar.component}
                                         onReplace={handleComponentReplace}
@@ -4766,9 +5829,28 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                     fontWeight: 'bold', 
                                     marginBottom: '16px',
                                     fontSize: '14px',
-                                    color: '#333'
+                                    color: '#333',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '8px'
                                 }}>
-                                    Email Components ({components.length})
+                                    <span>Email Components ({components.length})</span>
+                                    {EXPERIMENT.cond === 'cards' && (
+                                        <Button
+                                            ref={generateButtonRef}
+                                            data-leave-cards="true"
+                                            size="small"
+                                            onClick={() => {
+                                                if (showGuide) markGuideSeen();
+                                                handleExtractComponents();
+                                            }}
+                                            loading={loading}
+                                            disabled={!hasDraft || draftGenerating}
+                                        >
+                                            Regenerate
+                                        </Button>
+                                    )}
                                 </div>
                                 
                                 <div style={{
@@ -4784,7 +5866,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                                             marginTop: '20px',
                                             fontSize: '13px'
                                         }}>
-                                            Click "Generate Components" to analyze email structure
+                                            {EXPERIMENT.cond === 'cards' ? 'The components appear together with the email.' : 'Click "Generate Components" to analyze email structure'}
                                         </div>
                                     ) : (
                                         components.map((component, index) => (
@@ -4986,6 +6068,7 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
                     </Col>
                     </Row>
                     </div>
+                    </>
                 ) : (
                     <div
                         style={{

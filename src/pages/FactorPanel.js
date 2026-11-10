@@ -2,14 +2,14 @@
 // and in the Email Editor sidebar. Both share one selection state through useFactorSelection.
 import React, { useState, useEffect } from 'react';
 import { Button, Input, Checkbox, Card, Collapse, Row, Col, Radio, Tag, Select, Modal, Popconfirm, message } from 'antd';
-import { DeleteOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownOutlined } from '@ant-design/icons';
 import relationshipIcon from '../relationship.png'; // 引入图片
 import communicationIcon from '../commnuication.png'; // 引入图片
 import demongraphyIcon from '../demography.png'; // 引入图片
 import ristMitigationIcon from '../ristMitigation.png'; // 引入图片
 import axios from 'axios';
 
-export const useFactorSelection = ({ userTask, userName: globalUsername, taskId: globalTaskId, onDraftGenerated, onLoadingChange }) => {
+export const useFactorSelection = ({ userTask, userName: globalUsername, taskId: globalTaskId, onDraftGenerated, onLoadingChange, getExtraRequest }) => {
 
     const [factorData, setFactorData] = useState([]);
     const [selectedValues, setSelectedValues] = useState({}); // To track selected values for each factor
@@ -200,6 +200,16 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
         if (selectedTemplate === name) setSelectedTemplate(null);
     };
 
+    // Restore the options of the selected template; with no template selected the options are cleared
+    const handleResetTemplate = () => {
+        const template = templates.find(t => t.name === selectedTemplate);
+        setSelectedFactors(template ? template.selectedFactors || {} : {});
+        setSelectedValues(template ? template.selectedValues || {} : {});
+        setUserDefinedOptions(template ? template.userDefinedOptions || {} : {});
+        if (!template) setSelectedTemplate(null);
+        message.success(template ? `Options restored to template "${template.name}"` : 'Options cleared');
+    };
+
     // Clear all current selections
     const handleClearAll = () => {
         setSelectedFactors({});
@@ -256,14 +266,20 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
           taskId: globalTaskId
         });
 
-        const response = await axios.post('http://localhost:3001/generate-first-draft', { userTask, factorChoices });
+        // Details the writer already typed in (the "Information to fill" table) go to the writer with the request
+        const extraRequest = getExtraRequest ? getExtraRequest() : '';
+        const response = await axios.post('http://localhost:3001/generate-first-draft', {
+          userTask: extraRequest ? `${userTask}\n\n${extraRequest}` : userTask,
+          factorChoices
+        });
 
         // Save the draft content to latest.md
         await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
           content: response.data.draft
         });
 
-        onDraftGenerated(response.data.draft);
+        // The caller may still be busy with the new draft (the components are made from it): the loading state lasts until it is done
+        await onDraftGenerated(response.data.draft);
       } catch (error) {
         console.error('Error generating draft:', error);
         message.error('Failed to generate draft. Please try again.');
@@ -316,14 +332,38 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
         templates, selectedTemplate, templateNameTaken,
         saveTemplateModal, setSaveTemplateModal,
         templateName, setTemplateName,
-        handleAddTemplate, handleUpdateTemplate, handleApplyTemplate, handleDeleteTemplate,
+        handleAddTemplate, handleUpdateTemplate, handleApplyTemplate, handleDeleteTemplate, handleResetTemplate,
         handleClearAll, handleGenerateDraft, getCategoryIcon,
         loading,
     };
 };
 
 // variant "chat": two-column factor cards inside the chat step; variant "sidebar": single column in the editor sidebar
-const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGenerate, onGenerate }) => {
+// cardsLayout (sidebar only): Template and the option groups share one collapsible section with Update / Add / Reset, and
+// the template buttons at the bottom are left out; topSlot is shown above the request.
+// Section titles of the cards sidebar: lighter than the option text below them
+export const SIDEBAR_TITLE_STYLE = { fontWeight: 400, fontSize: '14px', color: '#8a9099' };
+
+// Small buttons on the title rows of the cards sidebar (Update, Add, Reset, Clear All, Apply)
+// Space between the sidebar sections (Information to fill, Request, Template): one value so the gaps stay equal
+export const SIDEBAR_SECTION_GAP = '28px';
+export const SIDEBAR_SMALL_BUTTON_STYLE = { height: '20px', padding: '0 7px', fontSize: '12px', lineHeight: '18px', borderRadius: '5px' };
+
+// The small arrow right of a sidebar title that shows or hides the section below it
+export const SidebarToggle = ({ open, onClick, what }) => (
+    <Button
+        size="small"
+        type="text"
+        aria-label={`${open ? 'Hide' : 'Show'} ${what}`}
+        aria-expanded={open}
+        title={`${open ? 'Hide' : 'Show'} ${what}`}
+        icon={<DownOutlined rotate={open ? 180 : 0} />}
+        style={{ width: '20px', height: '20px', minWidth: 0, padding: 0, marginLeft: '2px', color: '#8a9099', fontSize: '11px' }}
+        onClick={onClick}
+    />
+);
+
+const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGenerate, onGenerate, cardsLayout = false, topSlot = null }) => {
     const {
         factorData, setFactorData,
         selectedValues, setSelectedValues,
@@ -335,15 +375,16 @@ const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGe
         templates, selectedTemplate, templateNameTaken,
         saveTemplateModal, setSaveTemplateModal,
         templateName, setTemplateName,
-        handleAddTemplate, handleUpdateTemplate, handleApplyTemplate, handleDeleteTemplate,
+        handleAddTemplate, handleUpdateTemplate, handleApplyTemplate, handleDeleteTemplate, handleResetTemplate,
         handleClearAll, getCategoryIcon,
         loading,
     } = selection;
     const isChat = variant === 'chat';
+    // The sections of the cards sidebar are open at first; the arrow next to a title folds one away
+    const [templateOpen, setTemplateOpen] = useState(true);
+    const [requestOpen, setRequestOpen] = useState(true);
 
-    const templateSelect = (
-                <div style={{ marginTop: '12px' }}>
-                    <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#333', marginBottom: '6px' }}>Template</div>
+    const templateSelectControl = (
                     <Select
                         style={{ width: '100%' }}
                         placeholder={templates.length > 0 ? 'Select a saved template' : 'No saved templates yet'}
@@ -372,6 +413,12 @@ const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGe
                             </div>
                         )}
                     />
+    );
+
+    const templateSelect = (
+                <div style={{ marginTop: '12px' }}>
+                    <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#333', marginBottom: '6px' }}>Template</div>
+                    {templateSelectControl}
                 </div>
     );
 
@@ -705,6 +752,104 @@ const FactorPanel = ({ selection, variant = 'sidebar', userTask, hasDraft, canGe
                 {factorGrid}
                 <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '16px', flexWrap: 'wrap' }}>
                     {templateButtons}
+                    {generateButton}
+                </div>
+                {templateModal}
+            </div>
+        );
+    }
+
+    if (cardsLayout) {
+        const openAddTemplate = () => {
+            setTemplateName('');
+            setSaveTemplateModal(true);
+        };
+        return (
+            <div className="factor-panel factor-panel-sidebar" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                {/* The "Email Draft Editor" title row is 40px high under 24px of padding, so its centre is 44px below the top; the first row here is 20px high, so 34px of padding puts the "Information to fill" title on the same centre line */}
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '34px 16px 16px' }}>
+                    {topSlot}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <div style={SIDEBAR_TITLE_STYLE}>Request</div>
+                            <SidebarToggle open={requestOpen} onClick={() => setRequestOpen(open => !open)} what="request" />
+                        </div>
+                        <Button
+                            size="small"
+                            style={SIDEBAR_SMALL_BUTTON_STYLE}
+                            disabled={!userTask}
+                            onClick={async () => {
+                                try {
+                                    await navigator.clipboard.writeText(userTask || '');
+                                    message.success('Request copied');
+                                } catch (error) {
+                                    message.error('Could not copy to the clipboard');
+                                }
+                            }}
+                        >
+                            Copy
+                        </Button>
+                    </div>
+                    {requestOpen && (
+                        // The same white card as the table of Information to fill
+                        <Card variant="borderless" styles={{ body: { padding: 0 } }} style={{ overflow: 'hidden' }}>
+                            <div className="factor-panel-task" style={{ maxHeight: '140px', overflowY: 'auto', padding: '8px 16px', fontSize: '14px', lineHeight: 1.5715, color: 'rgba(0, 0, 0, 0.88)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                {userTask}
+                            </div>
+                        </Card>
+                    )}
+                    <div style={{ marginTop: SIDEBAR_SECTION_GAP }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                                <div style={SIDEBAR_TITLE_STYLE}>Template</div>
+                                <SidebarToggle open={templateOpen} onClick={() => setTemplateOpen(open => !open)} what="templates and options" />
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <Button
+                                    size="small"
+                                    style={SIDEBAR_SMALL_BUTTON_STYLE}
+                                    onClick={handleUpdateTemplate}
+                                    disabled={!selectedTemplate}
+                                    title={selectedTemplate ? `Save the current options into "${selectedTemplate}"` : 'Select a template first'}
+                                >
+                                    Update
+                                </Button>
+                                <Button size="small" style={SIDEBAR_SMALL_BUTTON_STYLE} onClick={openAddTemplate} title="Save the current options as a new template">
+                                    Add
+                                </Button>
+                                <Button
+                                    size="small"
+                                    style={SIDEBAR_SMALL_BUTTON_STYLE}
+                                    onClick={handleResetTemplate}
+                                    title={selectedTemplate ? `Restore the options of "${selectedTemplate}"` : 'Clear all options'}
+                                >
+                                    Reset
+                                </Button>
+                            </div>
+                        </div>
+                        {templateOpen && (
+                            <div>
+                                {/* The template select looks like the white cards of Request and Information to fill */}
+                                <div className="template-select-card">{templateSelectControl}</div>
+                                <style>{`
+                                    .factor-grid-cards .ant-card-head-title { font-size: 14px; }
+                                    .factor-grid-cards .ant-row { width: calc(100% + 16px) !important; }
+                                    .template-select-card .ant-select { height: 40px !important; }
+                                    .template-select-card .ant-select .ant-select-selector { height: 40px !important; padding: 0 16px !important; align-items: center;
+                                        background: #fff !important; border: 0 !important; border-radius: 8px !important;
+                                        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02) !important; }
+                                    .template-select-card .ant-select .ant-select-selection-item,
+                                    .template-select-card .ant-select .ant-select-selection-placeholder { line-height: 40px !important; padding-inline-end: 24px; }
+                                    .template-select-card .ant-select .ant-select-selection-placeholder { color: rgba(0, 0, 0, 0.45) !important; }
+                                    .template-select-card .ant-select .ant-select-selection-item { color: rgba(0, 0, 0, 0.88) !important; }
+                                    .template-select-card .ant-select .ant-select-arrow { inset-inline-end: 16px; color: rgba(0, 0, 0, 0.45); }
+                                `}</style>
+                                <div className="factor-grid-cards" style={{ marginTop: '12px' }}>{factorGrid}</div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 16px', borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
                     {generateButton}
                 </div>
                 {templateModal}
