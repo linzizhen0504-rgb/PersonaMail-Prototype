@@ -295,6 +295,13 @@ async function sendRequestToOllama(prompt, timeout) {
 // 以下两个函数仅在使用 Ollama 时调用，把模型输出对齐回原始的 intent 名称和取值。
 const normalizeName = (name) => String(name).toLowerCase().replace(/[_\s]+/g, ' ').trim();
 
+// Names the writer sees (component titles, intent dimensions and values) are short and plain: when the model joins two names with a
+// slash, only the first one is kept ("Call to Action / Proposed Next Steps" -> "Call to Action")
+const plainName = (text) => {
+    const name = String(text).split(/\s*\/\s*/)[0].trim();
+    return name || String(text).trim();
+};
+
 // Parse JSON from a model reply that may be wrapped in code fences, surrounded by prose,
 // or markdown-escaped (e.g. `\[` and `current\_value`)
 function parseModelJson(text) {
@@ -692,6 +699,61 @@ function filterFactorChoices(factorChoices) {
 
 
 
+// Let the model choose, from the request alone, which factors matter and what their values are. Only values that are real options
+// of a real factor are returned, so the editor can use the result directly
+app.post('/select-factors', async (req, res) => {
+    const { userTask } = req.body;
+    if (!userTask || !String(userTask).trim()) {
+        return res.status(400).json({ error: 'userTask is required' });
+    }
+
+    let promptTemplate;
+    let factorList;
+    try {
+        promptTemplate = fs.readFileSync(path.join(__dirname, '../../public/data/Prompts/18factor_selector.prompt.md'), 'utf-8');
+        factorList = JSON.parse(fs.readFileSync(path.join(__dirname, '../../public/data/PredefinedData/factor_list.json'), 'utf-8'));
+    } catch (error) {
+        console.error('Failed to load the factor selector prompt or factor list:', error);
+        return res.status(500).json({ error: 'Failed to load prompt template' });
+    }
+
+    const factorsForModel = factorList.map(({ id, title, select_type, options }) => ({
+        id, title, select_type, options: options.map(option => option.value)
+    }));
+    const prompt = promptTemplate
+        .replace('{{USER_TASK}}', () => String(userTask))
+        .replace('{{FACTOR_LIST}}', () => JSON.stringify(factorsForModel, null, 2));
+
+    // Keep what is a real factor with a real option; a single factor keeps one value
+    const cleanSelection = (raw) => {
+        const selectedFactors = {};
+        const selectedValues = {};
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { selectedFactors, selectedValues };
+        for (const factor of factorList) {
+            if (!(factor.id in raw)) continue;
+            const allowed = factor.options.map(option => option.value);
+            const given = Array.isArray(raw[factor.id]) ? raw[factor.id] : [raw[factor.id]];
+            const values = [...new Set(given.filter(value => allowed.includes(value)))];
+            if (values.length === 0) continue;
+            selectedFactors[factor.id] = true;
+            selectedValues[factor.id] = factor.select_type === 'single' ? values[0] : values;
+        }
+        return { selectedFactors, selectedValues };
+    };
+
+    try {
+        let result;
+        const isUsable = (data) => data && typeof data === 'object' && !Array.isArray(data)
+            && Object.keys(cleanSelection(data).selectedFactors).length > 0;
+        const raw = await requestModelJson(prompt, { enableThinking: false }, isUsable);
+        result = cleanSelection(raw);
+        res.json(result);
+    } catch (error) {
+        console.error('Error selecting factors:', error);
+        res.status(500).json({ error: 'Failed to select factors' });
+    }
+});
+
 app.post('/generate-first-draft', async (req, res) => {
     const { userTask, factorChoices } = req.body;
     // Debug: Print variable type and value of factorChoices
@@ -864,7 +926,16 @@ app.post('/component-extractor', async (req, res) => {
         }
 
         console.log('Component Extractor Output:', responseText);
-        res.json({ components: responseText });
+        let components = responseText;
+        try {
+            const parsed = parseModelJson(responseText);
+            if (Array.isArray(parsed)) {
+                components = JSON.stringify(parsed.map(component => (component && typeof component.title === 'string' ? { ...component, title: plainName(component.title) } : component)));
+            }
+        } catch (parseError) {
+            // the front end reads the reply on its own terms
+        }
+        res.json({ components });
     } catch (error) {
         console.error('Error in Component Extractor:', error);
         res.status(500).json({ error: 'Error in Component Extractor' });
@@ -922,7 +993,9 @@ app.post('/intent-analyzer-new', async (req, res) => {
         }
         parsedData = parsedData.map(intent => ({
             ...intent,
-            other_values: Array.isArray(intent.other_values) ? intent.other_values.filter(value => typeof value === 'string' && value.trim()) : []
+            dimension: plainName(intent.dimension),
+            current_value: plainName(intent.current_value),
+            other_values: Array.isArray(intent.other_values) ? intent.other_values.filter(value => typeof value === 'string' && value.trim()).map(plainName) : []
         }));
 
         // Ensure the intents directory exists
@@ -1092,6 +1165,47 @@ app.post('/intent-change-rewriter', async (req, res) => {
 
 
 // Propose new alternative values for one intent after the user rejected every version shown for it
+// After the sender used a version for an intent, which of the other units that share the intent no longer agree with the new value?
+// The model reads the actual texts; a unit it does not answer for is reported as needing a change, so nothing is dropped silently
+app.post('/intent-consistency-check', async (req, res) => {
+    const { userTask, draftLatest, intentSelected, oldValue, source, targets } = req.body;
+    if (!intentSelected || !intentSelected.dimension || !source || !Array.isArray(targets) || targets.length === 0) {
+        return res.status(400).json({ error: 'intentSelected, source and targets are required' });
+    }
+
+    let promptTemplate;
+    try {
+        promptTemplate = fs.readFileSync(path.join(__dirname, '../../public/data/Prompts/19intent_consistency_check.prompt.md'), 'utf-8');
+    } catch (error) {
+        console.error('Failed to load 19intent_consistency_check.prompt.md:', error);
+        return res.status(500).json({ error: 'Failed to load prompt template' });
+    }
+    const prompt = promptTemplate
+        .replace('{{USER_TASK}}', () => String(userTask || ''))
+        .replace('{{DRAFT_LATEST}}', () => String(draftLatest || ''))
+        .replace('{{INTENT}}', () => JSON.stringify({ dimension: intentSelected.dimension, old_value: oldValue || null, new_value: intentSelected.current_value }, null, 2))
+        .replace('{{SOURCE}}', () => JSON.stringify({ title: source.title, text_before: source.oldContent, text_after: source.newContent }, null, 2))
+        .replace('{{TARGETS}}', () => JSON.stringify(targets.map(({ id, title, content }) => ({ id, title, content })), null, 2));
+
+    const ids = new Set(targets.map(target => String(target.id)));
+    const isUsable = (data) => Array.isArray(data) && data.length > 0
+        && data.every(entry => entry && ids.has(String(entry.id)) && typeof entry.needs_change === 'boolean');
+    try {
+        const parsed = await requestModelJson(prompt, { enableThinking: false }, isUsable);
+        const answered = new Map(parsed.map(entry => [String(entry.id), entry]));
+        const results = targets.map(target => {
+            const entry = answered.get(String(target.id));
+            return entry
+                ? { id: target.id, needs_change: entry.needs_change, reason: typeof entry.reason === 'string' ? entry.reason.trim() : '' }
+                : { id: target.id, needs_change: true, reason: '' };
+        });
+        res.json({ results });
+    } catch (error) {
+        console.error('Error checking consistency:', error);
+        res.status(500).json({ error: 'Failed to check consistency' });
+    }
+});
+
 app.post('/intent-regenerate-values', async (req, res) => {
     const { userName, taskId, userTask, draftLatest, intentDimension, currentValue, rejectedValues } = req.body;
 
@@ -1141,7 +1255,7 @@ app.post('/intent-regenerate-values', async (req, res) => {
 
     try {
         const parsed = await requestModelJson(prompt, {}, isValidValues);
-        res.json({ other_values: parsed.other_values.map(value => value.trim()) });
+        res.json({ other_values: parsed.other_values.map(value => plainName(value)) });
     } catch (error) {
         console.error('Error in Intent Regenerate Values:', error);
         res.status(500).json({ error: 'Failed to regenerate intent values' });

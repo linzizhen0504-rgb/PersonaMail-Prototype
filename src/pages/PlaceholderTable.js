@@ -3,6 +3,18 @@ import { Card, Input } from 'antd';
 import { ClearOutlined, DeleteOutlined } from '@ant-design/icons';
 import { SIDEBAR_TITLE_STYLE, SIDEBAR_SECTION_GAP, SidebarToggle, HoverIconButton } from './FactorPanel';
 
+// Tab moves from one value box to the next one (Shift+Tab to the previous one), over the delete icons in between; from the last box
+// Tab leaves the table as usual
+const moveBetweenValues = (event) => {
+    if (event.key !== 'Tab') return;
+    const boxes = Array.from(event.target.closest('table').querySelectorAll('input[placeholder="Enter value"]'));
+    const next = boxes[boxes.indexOf(event.target) + (event.shiftKey ? -1 : 1)];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+    next.select();
+};
+
 // Table of the [bracketed] information a draft still asks for, shown at the top of the sidebar.
 // It only draws; EmailEditor finds the placeholders and puts the values into the draft that "Regenerate with These Options" makes.
 const PlaceholderTable = ({ rows, onChange, onDelete, onClearAll, canClear, generating = false }) => {
@@ -31,7 +43,7 @@ const PlaceholderTable = ({ rows, onChange, onDelete, onClearAll, canClear, gene
                 // The table fills the white card: no grey box inside it, so the card's whole area shows rows
                 <Card variant='borderless' styles={{ body: { padding: 0 } }} style={{ overflow: 'hidden' }}>
                     {rows.length === 0 && !generating ? (
-                        <div style={{ ...cell, color: 'rgba(0, 0, 0, 0.45)' }}>Nothing to fill in here. Reasons and next steps in brackets can be changed with the version cards.</div>
+                        <div style={{ ...cell, color: 'rgba(0, 0, 0, 0.45)' }}>Nothing to fill in here.</div>
                     ) : (
                         // The ruled lines run from the left edge of the placeholders to the right edge of the inputs. The 10px between their end and
                         // the card edge hold the scrollbar in the middle: 2px margin, the 6px scrollbar, 2px padding. It only shows while scrolling
@@ -77,6 +89,7 @@ const PlaceholderTable = ({ rows, onChange, onDelete, onClearAll, canClear, gene
                                                     placeholder='Enter value'
                                                     aria-label={`Value for ${row.placeholder}`}
                                                     onChange={event => onChange(row.key, event.target.value)}
+                                                    onKeyDown={moveBetweenValues}
                                                 />
                                             </td>
                                         </tr>

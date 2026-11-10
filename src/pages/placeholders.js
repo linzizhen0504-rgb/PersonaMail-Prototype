@@ -19,7 +19,8 @@ const bracketLabel = (inner) => {
 // Brackets that ask for a reason or for a next step / progress ([briefly state your reason, e.g., … / … / …], [mention progress, …])
 // are not information to fill in: the writer changes such text with the version cards. A bracket is one of them when its label
 // starts with an explaining verb, names a reason, or names progress or a next step, or when it lists options that are each a
-// phrase of three words or more.
+// phrase of three words or more, or that all start in lower case ([stealing my food / snuggling in bed / snacking]: a field name
+// starts with a capital letter, a list of things to pick from does not).
 const NARRATIVE_START = /^(?:(?:briefly|please|optionally)\s+)*(?:mention|state|describe|explain|outline|summari[sz]e|select|choose|list)\b/i;
 const REASON_WORDS = /\b(?:reasons?|circumstances?|illness|emergency|unforeseen|unexpected|medical|obligations?)\b/i;
 const PROGRESS_WORDS = /\b(?:progress|next steps?|follow[- ]?up|plan to|will do|completed|accomplished|what you['’]ve done|action items?)\b/i;
@@ -27,7 +28,8 @@ export const isNarrativePlaceholder = (inner) => {
     const label = bracketLabel(inner);
     if (NARRATIVE_START.test(label) || REASON_WORDS.test(label) || PROGRESS_WORDS.test(label)) return true;
     const options = clean(inner).split(/\s+\/\s+/);
-    return options.length >= 2 && options.every(option => option.split(/\s+/).length >= 3);
+    if (options.length < 2) return false;
+    return options.every(option => option.split(/\s+/).length >= 3) || options.every(option => /^[a-z]/.test(option));
 };
 
 // Keys of the brackets that do not contain a slash: evidence that a slash without spaces, as in [Course Name/Section
@@ -38,14 +40,16 @@ export const knownPlaceholderKeys = (text) => {
         const inner = match.slice(1, -1);
         if (isNarrativePlaceholder(inner)) return;
         const label = bracketLabel(inner);
-        if (!label.includes('/')) keys.add(placeholderKey(label));
+        if (!label.includes('/') && !/\s&\s/.test(label)) keys.add(placeholderKey(label));
     });
     return keys;
 };
 
 // The pieces of one bracket's label, names at even and separators at odd positions; null when it is a single field
 const splitPlaceholder = (label, known) => {
-    const pieces = label.split(/(\s*\/\s*)/);
+    // A slash with spaces always joins two fields; a slash without spaces, an ampersand or an "and" only when one side is a field of its own
+    // ([Course Name & Section Number] next to [Course Name]; [Terms & Conditions] alone stays one field)
+    const pieces = label.split(/(\s*\/\s*|\s+&\s+|\s+and\s+)/i);
     if (pieces.length < 3) return null;
     const names = pieces.filter((_, i) => i % 2 === 0).map(clean);
     if (names.some(name => !name)) return null;

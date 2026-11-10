@@ -23,7 +23,7 @@ You are an AI email analysis assistant. Your task is to analyze an email draft a
    - Valediction/sign-off
 3. **Extract the actual content** for each identified component from the draft.
 4. **Generate appropriate IDs** using snake_case format (e.g., "opening_salutation", "statement_of_purpose").
-5. **Create descriptive titles** that clearly indicate the component's function.
+5. **Create short titles**: a plain name of one to three words for the component's function, such as "Opening Salutation", "Call to Action" or "Valediction". Give each component one name only: never join two names with a slash ("/"), "and" or a dash, and never add a second description.
 6. **Only include components that actually exist** in the provided draft - do not create placeholder or empty components.
 
 ---

@@ -33,23 +33,22 @@ We started from the authors' released code and redesigned the interface. The ori
 
 ### What we do not use
 
-- **Persona-Situation Anchors** (Section 4.3.1), including the anchor-adaptation agent and the anchor image generation. We replaced them with the simpler templates described below.
+- **Persona-Situation Anchors** (Section 4.3.1), including the anchor-adaptation agent and the anchor image generation. We replaced them with the factor options chosen by the model, described below.
 - **The Doubao API.** It was only used to generate anchor images, so it is no longer needed. You do not need a Doubao key, and `serverDB.js` does not need to run.
 
 ## What We Redesigned
 
 ### One page instead of three
 
-The original has separate Email Task, Email Editor and Anchors pages with a navigation sidebar. Here the user enters a request, picks a template or sets the factors in a chat-style step, and continues in the editor on the same page. The navigation sidebar is replaced by a header with the logo, a New Task button and a user menu with Log out.
+The original has separate Email Task, Email Editor and Anchors pages with a navigation sidebar. Here the user enters a request, the model chooses the factor options for it, and the editor opens on the same page with the first draft being written. The navigation sidebar is replaced by a header with the logo, a New Task button and a user menu with Log out.
 
 ### Sidebar (`cards`)
 
-The left sidebar keeps the request and the options editable while the user writes. Its small buttons (Clear All, Copy, Update, Add, Reset) show only an icon; the name slides out next to the icon when the mouse is over the button. Its sections are open by default and can be collapsed with the arrow next to each title; an arrow between the sidebar and the editor hides or shows the whole sidebar.
+The left sidebar keeps the request and the options editable while the user writes. Its small buttons (Clear All, Copy) show only an icon; the name slides out next to the icon when the mouse is over the button. Its sections are open by default and can be collapsed with the arrow next to each title; an arrow between the sidebar and the editor hides or shows the whole sidebar.
 
-- **Information to fill.** A table of the `[bracketed]` placeholders in the draft, with an input for each. Names that appear several times are listed once, and `[A / B]` brackets are split into their own fields. A bracket with an example, such as `[Proposed Date, e.g., Friday 5 PM]`, is listed under the text before the example (`[Proposed Date]`); "for example" and "such as" count as well, and emptying the input puts the whole bracket back as it was. Brackets that ask for a reason or a next step (`[briefly state your reason, e.g., … / …]`, `[mention progress, …]`) are not in the table: they stay as they are in the email and are changed with the version cards, whose versions replace such a bracket with concrete wording. What is typed goes into the email live (after a short pause), in every place the placeholder occurs; emptying an input puts the brackets back. The row stays after it is filled, so the value can be changed again, and it follows when the filled-in text is edited in the email. The row goes when all of that text is deleted by hand. The small trash icon in front of a placeholder takes the placeholder out of the email (every place it occurs, with the value filled in, and the spaces it leaves) and removes its row. Cmd/Ctrl+Z undoes a change made from the table, a deletion included. There is no Apply button: the values are also sent with the request when you click **Regenerate with These Options** and are filled into the new draft; if a value does not fit the new draft, a message says so. **Clear All** empties the inputs and puts the brackets back.
+- **Information to fill.** A table of the `[bracketed]` placeholders in the draft, with an input for each. Names that appear several times are listed once, and `[A / B]` brackets are split into their own fields. A bracket with an example, such as `[Proposed Date, e.g., Friday 5 PM]`, is listed under the text before the example (`[Proposed Date]`); "for example" and "such as" count as well, and emptying the input puts the whole bracket back as it was. Brackets that ask for a reason or a next step (`[briefly state your reason, e.g., … / …]`, `[mention progress, …]`) and lists of alternatives to pick from (`[stealing my food / snuggling in bed / snacking]`: every item starts in lower case) are not in the table: they stay as they are in the email and are changed with the version cards, whose versions replace such a bracket with concrete wording. What is typed goes into the email live (after a short pause), in every place the placeholder occurs; emptying an input puts the brackets back. The row stays after it is filled, so the value can be changed again, and it follows when the filled-in text is edited in the email. The row goes when all of that text is deleted by hand. The small trash icon in front of a placeholder takes the placeholder out of the email (every place it occurs, with the value filled in, and the spaces it leaves) and removes its row. Cmd/Ctrl+Z undoes a change made from the table, a deletion included. There is no Apply button: the values are also sent with the request when you click **Regenerate with These Options** and are filled into the new draft; if a value does not fit the new draft, a message says so. **Clear All** empties the inputs and puts the brackets back.
 - **Request.** The user's request, with a **Copy** button.
-- **Template.** A saved set of factor choices is chosen from a dropdown; **Update**, **Add** and **Reset** manage the templates. This replaces both "Save as Default" and the Anchors.
-- **Factors.** The four factor categories of the paper, as before.
+- **Tone Factors.** The four factor categories of the paper. When a request is sent, the model reads it and selects only the factors that matter for it (`POST /select-factors`, prompt `18factor_selector.prompt.md`); every value comes from the factor's own options. The user can change any of them, and **Clear All** next to the title sets every option back to Not selected. If the model cannot choose, the draft is written without options and a message says so.
 - **Regenerate with These Options** (at the bottom) writes a new draft from the current options and request.
 
 ### Generating the email (`cards`)
@@ -86,7 +85,7 @@ The app has one interface. Each intent is a pill; clicking a pill shows up to th
 - Each card shows the new text of the unit as plain text. Sentences that are not in the current text are marked in green.
 - Each display ends exactly once: **Use**, **Regenerate**, or leaving (selecting another unit or intent, regenerating the components, New Task). Each ending writes one log line and sends one update to the model.
 - **Regenerate** (the one in the version area) asks the model service whether the shown values were rejected often enough to be replaced. If so, it generates three new intent values (`/intent-regenerate-values`); otherwise it generates new versions for the same values. The Regenerate button of the component list is a different button: it rebuilds the components and counts as leaving.
-- **Intent propagation.** Several units can share one intent. After **Use**, the other units that share the intent are rewritten in parallel to the same value and written into the editor, and the intent's current value is updated. A rewrite is rejected if it contains other units' text, is far longer than the original, or creates repeated sentences; it is retried once and then skipped.
+- **Intent propagation.** Several units can share one intent. After **Use**, the other units that share it are checked against the new value (`POST /intent-consistency-check`, prompt `19intent_consistency_check.prompt.md`): the model reads their texts and says, with a one-sentence reason, which ones no longer agree with it. If none does, nothing is shown (the notice says they already fit). Otherwise the window "Apply this change to other parts?" lists only the ones that do not fit, with the reason; their rewrites for the new value are made in parallel and shown as they arrive, with the changed sentences in green. The user ticks the ones that should follow and clicks **Apply selected** (Cmd/Ctrl+Z takes them back), or clicks **Skip**; nothing is written before that, and a unit that is skipped keeps its text and its intent value. If the check itself fails, every unit that shares the intent is offered. A rewrite is rejected if it contains other units' text, is far longer than the original, or creates repeated sentences; it is retried once and then skipped.
 - **Version filtering.** Versions that would duplicate or swallow other parts of the email are dropped before display. If none survive after a retry, the user sees "Couldn't generate versions. Try again."
 - **Label check.** The rewriter prompt receives the real intent values, and the reply must match them one to one, with up to three retries. Otherwise the request fails instead of showing a mislabeled card.
 - Highlighting marks the selected unit in the editor with a background colour only. A unit is located in the email by its text; if it cannot be found exactly, a looser search inside a single paragraph is used. Before the components are made, the draft file is updated with what is in the editor, so hand edits do not break this.
@@ -128,7 +127,8 @@ CORS allows `localhost:3000` and `127.0.0.1:3000`. If the service is unreachable
 
 The backend writes one JSON line per event to `src/data/logs/{pid}.jsonl` through `POST /log-event` (ignored by git).
 
-- Versions: `cards_shown` (context, ordering, `mmr_used`, trigger, `style_strength`, filtered candidates), `pick`, `regenerate`, `leave`, `edit_done` (text edited after Use, for analysis only), `values_regenerated`, `versions_regenerated`, `regenerate_failed`, `model_unavailable`, `intent_propagated` (updated and failed units).
+- Options: `factors_auto_selected` (the factors and values the model chose), `factors_auto_select_failed`.
+- Versions: `cards_shown` (context, ordering, `mmr_used`, trigger, `style_strength`, filtered candidates), `pick`, `regenerate`, `leave`, `edit_done` (text edited after Use, for analysis only), `values_regenerated`, `versions_regenerated`, `regenerate_failed`, `model_unavailable`, `consistency_checked` (the units checked and the ones that did not fit, `check_failed`), `propagation_prompted` (the window opened; the units listed), `intent_propagated` (after the user answered: `accepted_units`, `skipped_units`, failed units and their reasons).
 - Editor: `unit_click_select` (a unit was selected by clicking it), `selection_rewrite_requested`, `selection_rewrite_applied`, `selection_rewrite_discarded`, `selection_rewrite_undone`, `selection_rewrite_redone` (the Describe changes box; `trigger` is `click` or `selection`), `copy_section` (subject or body copied), `placeholders_applied` (the labels of the filled fields and of the ones that were not used; the typed values are not logged), `placeholder_deleted` (the label of a placeholder removed from the email with its trash icon).
 
 `model_service/build_priors.py --pids P01 P02` turns logs into `priors.json`, and `convert_legacy_data.py` converts counts from the older three-outcome format.
@@ -210,16 +210,15 @@ Open `http://localhost:3000/?pid=P01` (`pid` identifies the participant in the l
 
 1. Enter a username at the top right.
 2. Describe the email you need and send.
-3. Choose a saved template or select the factors that matter, then click **Generate Email Draft**.
-4. Wait for the email and its components to appear together.
-5. Edit the text directly, or change the options in the sidebar, fill in the information table and click **Regenerate with These Options** for a new draft.
+3. Wait while the model chooses the factor options (shown in the sidebar under **Tone Factors**) and writes the email; the email and its components appear together.
+4. If the options or the email are not what you want, change the options and click **Regenerate with These Options**.
+5. Edit the text directly, or fill in the information table; the values also go into a new draft when you regenerate.
 6. Click a unit to see its intents (the first one opens at once), click an intent pill to switch, and **Use** one of the cards or **Regenerate** it. Click the highlighted unit, or select text, to ask the AI for a change in your own words. After editing the email by hand, click **Regenerate** next to Email Components to rebuild the components.
 
 ## Notes
 
-- Templates are stored in the browser's local storage, per username. They are not shared between browsers or machines.
 - Drafts and session data are written to `src/data/SessionData/`, and API logs to `src/pages/api_logs/`. Both stay local and are ignored by git.
-- Making the components takes several model calls (the email, the components, the intents and their links) and can take a while, especially with a local model. Intent propagation can take 30 to 120 seconds with a local model, and the editor refreshes when it finishes.
+- Making the components takes several model calls (the email, the components, the intents and their links) and can take a while, especially with a local model. The rewrites in the propagation window can take 30 to 120 seconds with a local model; each one appears as soon as it is ready.
 - Model counts and style state live in `model_service/data/` (`counts.json`, `stats.json`, `styles.json`), also ignored by git. Delete them to reset the model.
 - The study data of each participant are kept under their `pid`. Use a separate `pid` such as `PT01` for testing.
 

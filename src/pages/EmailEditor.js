@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
 import { withHistory, HistoryEditor } from 'slate-history';
-import { Card, message, Button, Row, Col, Tag, Modal, Input, Spin, Tour } from 'antd';
+import { Card, message, Button, Row, Col, Tag, Modal, Input, Spin, Tour, Checkbox } from 'antd';
 import axios from 'axios';
 import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
@@ -10,7 +10,7 @@ import FactorPanel, { useFactorSelection } from './FactorPanel';
 import SelectionRewriteBox, { CARD_BORDER_RADIUS } from './SelectionRewriteBox';
 import PlaceholderTable from './PlaceholderTable';
 import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholderFields, containsPlaceholder, removePlaceholder } from './placeholders';
-import { RobotIcon, UserAvatarIcon, BotAvatarIcon } from '../icons';
+import { RobotIcon } from '../icons';
 
 
 // The Ask AI box is hidden; the handlers and backend endpoint stay in place
@@ -188,6 +188,28 @@ const locateUnitText = (text, content) => {
     } catch (error) {
         return null;
     }
+};
+
+// Where a unit sits in the editor paragraphs: inside one paragraph, or over several (a sign-off such as "With all my love," and the name
+// below it). Returns { first, last, start, end }: the first and last paragraph and the offsets in them; null when it is not there.
+const locateUnitRange = (paragraphs, content) => {
+    for (let i = 0; i < paragraphs.length; i++) {
+        const span = locateUnitText(paragraphs[i], content);
+        if (span) return { first: i, last: i, start: span.start, end: span.end };
+    }
+    const joined = paragraphs.join('\n\n');
+    const span = locateUnitText(joined, content);
+    if (!span) return null;
+    let offset = 0;
+    let range = { first: -1, last: -1, start: 0, end: 0 };
+    paragraphs.forEach((text, i) => {
+        const from = offset;
+        const to = offset + text.length;
+        if (range.first === -1 && span.start <= to) { range.first = i; range.start = Math.max(span.start - from, 0); }
+        if (range.last === -1 && span.end <= to) { range.last = i; range.end = Math.max(span.end - from, 0); }
+        offset = to + 2;
+    });
+    return range.first !== -1 && range.last !== -1 ? range : null;
 };
 
 // Plain form of a text for comparing: lower case, no punctuation, single spaces
@@ -376,6 +398,10 @@ const EmailEditor = () => {
     const [recoveredUserTask, setRecoveredUserTask] = useState('');
     const [taskChecked, setTaskChecked] = useState(false);
     const userTask = (submittedTask.taskId === globalTaskId && submittedTask.text) || recoveredUserTask;
+    // The first draft starts in the same click that sends the request, before the page has re-rendered with it: the steps that follow
+    // (the components and intents) read the request from this ref, not from the render they were created in
+    const userTaskRef = useRef('');
+    userTaskRef.current = userTask;
 
     useEffect(() => {
         let cancelled = false;
@@ -412,7 +438,10 @@ const EmailEditor = () => {
             console.error('Error updating task meta:', error);
         }
         setSubmittedTask({ taskId: globalTaskId, text });
+        userTaskRef.current = text;
         setTaskInput('');
+        // The model chooses the factors for this request and the first draft is written with them (the editor opens at once)
+        factorSelection.autoSelectAndGenerate(text);
     };
 
     // Use global state
@@ -544,6 +573,10 @@ const EmailEditor = () => {
     const [cardsState, setCardsState] = useState(null);
     const cardsRef = useRef(null);
     const [notice, setNotice] = useState(null);
+    // The window that asks before a style change is carried over to the other units (see proposeIntentChange)
+    const [propagation, setPropagation] = useState(null);
+    const propagationRef = useRef(null);
+    const propagationIdRef = useRef(0);
     const versionCardsRef = useRef(null);
     const cardsRequestIdRef = useRef(0);
     const editWatchRef = useRef(null);
@@ -587,7 +620,7 @@ const EmailEditor = () => {
             logEvent({ event: 'model_unavailable', endpoint: 'reset-session' });
         });
     };
-    // Factor selections are made in the chat step first, then stay editable in the editor sidebar
+    // The model chooses the factor selections for the request; they stay editable in the editor sidebar
     // cards: the "Information to fill" table has no Apply button; the values typed in it go into the draft that "Regenerate with
     // These Options" produces. A field without a value stays in its brackets.
     // The values typed in the table are given to the writer with the request, so the new draft uses them where it needs them (a new
@@ -634,22 +667,15 @@ const EmailEditor = () => {
         taskId: globalTaskId,
         onDraftGenerated: handleDraftGenerated,
         onLoadingChange: setDraftGenerating,
-        getExtraRequest: buildFillNote
+        getExtraRequest: buildFillNote,
+        logEvent
     });
     const powerChoice = factorSelection.selectedFactors && factorSelection.selectedFactors[POWER_FACTOR_ID]
         ? (factorSelection.selectedValues || {})[POWER_FACTOR_ID] : null;
     const powerValue = Array.isArray(powerChoice) ? powerChoice[0] : powerChoice;
     logContext = (typeof powerValue === 'string' && powerValue.trim()) || 'unknown';
-    // The editor opens once the user confirms their choices in the chat step (or a draft already exists)
-    const [confirmedTaskId, setConfirmedTaskId] = useState(null);
-    const inEditor = hasDraft || confirmedTaskId === globalTaskId;
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-    const handleConfirmAndGenerate = () => {
-        setConfirmedTaskId(globalTaskId);
-        setSidebarCollapsed(false);
-        factorSelection.handleGenerateDraft();
-    };
     // "Ask AI to add content" states
     const [aiPrompt, setAiPrompt] = useState('');
     const [aiLoading, setAiLoading] = useState(false);
@@ -1167,9 +1193,8 @@ const EmailEditor = () => {
 
             // Call the new intent-analyzer-new endpoint
             try {
-                console.log('Global State:', { globalUsername, globalTaskId, userTask });
                 const intentResponse = await axios.post('http://localhost:3001/intent-analyzer-new', {
-                    userTask: userTask,
+                    userTask: userTaskRef.current,
                     userName: globalUsername,
                     taskId: globalTaskId,
                 });
@@ -3198,11 +3223,11 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         deselectEditor();
         setTimeout(() => {
             useInProgressRef.current = false;
-            finishCardUse(cards, item, component, newContent, intentSelected, replacedText);
+            finishCardUse(cards, item, component, newContent, intentSelected, replacedText, intent.current_value);
         }, 0);
     };
 
-    const finishCardUse = (cards, item, component, newContent, intentSelected, replacedText) => {
+    const finishCardUse = (cards, item, component, newContent, intentSelected, replacedText, oldValue) => {
         const applied = replaceComponentText(cards.unitId, newContent, intentSelected);
         if (!applied) return;
 
@@ -3227,13 +3252,14 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             entered: false
         };
 
-        // The same intent can drive other units too: bring them in line with the new value
-        propagateIntentChange({
+        // The other units that share this intent are checked against the new value; the ones that no longer fit are offered the change
+        proposeIntentChange({
             sourceUnitId: cards.unitId,
             sourceTitle: cards.unitTitle,
             sourceOldContent: component.content,
             sourceNewContent: newContent,
             intentSelected,
+            oldValue,
             chosenValue: item.value
         });
     };
@@ -3265,44 +3291,61 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         updates.forEach(({ unit, newContent }) => {
             const current = componentsRef.current.find(c => c.id === unit.id);
             const oldContent = current ? current.content : unit.content;
-            let span = null;
-            const index = workingValue.findIndex(node => {
-                span = locateUnitText(getNodeText(null, node), oldContent);
-                return !!span;
-            });
-            if (index === -1) { // the text was edited away or overwritten in the meantime
+            const paragraphTexts = workingValue.map(node => getNodeText(null, node));
+            const range = locateUnitRange(paragraphTexts, oldContent);
+            if (!range) { // the text was edited away or overwritten in the meantime
                 rejected[unit.id] = 'locate: text not found in the editor';
                 return;
             }
+            const oneParagraph = range.first === range.last;
             const problem = rewriteProblem({
                 unit, oldContent, newContent,
                 otherUnits: combinedResultsRef.current.filter(u => u.id !== unit.id),
-                paragraphs: workingValue.map(node => getNodeText(null, node)),
-                index
+                paragraphs: oneParagraph ? paragraphTexts : [paragraphTexts.join('\n\n')],
+                index: oneParagraph ? range.first : 0
             });
             if (problem) { // never write a rewrite that would duplicate or swallow other parts of the email
                 rejected[unit.id] = `check: ${problem}`;
                 return;
             }
-            if (cursor && cursor.index === index) {
-                if (span.end <= cursor.offset) {
-                    cursor.offset += newContent.length - (span.end - span.start);
-                } else if (span.start < cursor.offset) {
-                    cursor.offset = span.start + Math.min(cursor.offset - span.start, newContent.length);
+            const keepOf = (node) => (Array.isArray(node.children) ? node.children.find(child => child && child.highlight) : null);
+            if (oneParagraph) {
+                const index = range.first;
+                const span = { start: range.start, end: range.end };
+                if (cursor && cursor.index === index) {
+                    if (span.end <= cursor.offset) {
+                        cursor.offset += newContent.length - (span.end - span.start);
+                    } else if (span.start < cursor.offset) {
+                        cursor.offset = span.start + Math.min(cursor.offset - span.start, newContent.length);
+                    }
                 }
+                workingValue = workingValue.map((node, i) => {
+                    if (i !== index) return node;
+                    const keep = keepOf(node);
+                    return {
+                        ...node,
+                        children: [{
+                            text: getNodeText(null, node).slice(0, span.start) + newContent + getNodeText(null, node).slice(span.end),
+                            componentId: keep ? keep.componentId : unit.id,
+                            ...(keep ? { highlight: true } : {})
+                        }]
+                    };
+                });
+            } else {
+                // The unit covers several paragraphs: they are replaced by the paragraphs of the new text
+                if (cursor && cursor.index >= range.first && cursor.index <= range.last) cursor = null;
+                const firstNode = workingValue[range.first];
+                const keep = keepOf(firstNode);
+                const parts = newContent.split(/\n+/).map(part => part.trim()).filter(Boolean);
+                parts[0] = paragraphTexts[range.first].slice(0, range.start) + parts[0];
+                parts[parts.length - 1] += paragraphTexts[range.last].slice(range.end);
+                const rebuilt = parts.map(text => ({
+                    ...firstNode,
+                    children: [{ text, componentId: keep ? keep.componentId : unit.id, ...(keep ? { highlight: true } : {}) }]
+                }));
+                workingValue = [...workingValue.slice(0, range.first), ...rebuilt, ...workingValue.slice(range.last + 1)];
+                if (cursor && cursor.index > range.last) cursor.index += rebuilt.length - (range.last - range.first + 1);
             }
-            workingValue = workingValue.map((node, i) => {
-                if (i !== index) return node;
-                const keep = Array.isArray(node.children) ? node.children.find(child => child && child.highlight) : null;
-                return {
-                    ...node,
-                    children: [{
-                        text: getNodeText(null, node).slice(0, span.start) + newContent + getNodeText(null, node).slice(span.end),
-                        componentId: keep ? keep.componentId : unit.id,
-                        ...(keep ? { highlight: true } : {})
-                    }]
-                };
-            });
             const draftSpan = locateUnitText(draft, oldContent);
             if (draftSpan) draft = draft.slice(0, draftSpan.start) + newContent + draft.slice(draftSpan.end);
             applied.push({ id: unit.id, title: unit.title, oldContent, newContent });
@@ -3360,81 +3403,159 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         return applied;
     };
 
-    // cards: after Use, every other unit linked to the same intent gets the new intent value too: its text is
-    // rewritten for that value (in parallel) and written into the editor, so nothing has to be redone unit by unit.
-    const propagateIntentChange = async ({ sourceUnitId, sourceTitle, sourceOldContent, sourceNewContent, intentSelected, chosenValue }) => {
-        const started = Date.now();
+    // cards: the rewrite of one other unit for the new value of the intent (nothing is written into the editor here). The model
+    // sometimes returns more than the unit (neighbouring sentences); ask again once if so. Throws a short reason when nothing usable comes back.
+    const proposeUnitRewrite = async (unit, intentSelected, draftBase) => {
+        const intentOthers = (unit.linkedIntents || [])
+            .filter(i => i.dimension !== intentSelected.dimension)
+            .map(i => ({ dimension: i.dimension, current_value: i.current_value }));
+        let lastProblem = 'No version returned';
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
+                userName: globalUsername,
+                taskId: globalTaskId,
+                userTask: userTaskRef.current,
+                draftLatest: draftBase,
+                componentCurrent: unit.content,
+                intentSelected: {
+                    dimension: intentSelected.dimension,
+                    current_value: intentSelected.current_value,
+                    other_values: intentSelected.other_values
+                },
+                intentOthers
+            });
+            const variation = ((response.data && response.data.component_variations) || [])
+                .find(v => v && v.intent_value === intentSelected.current_value);
+            if (!variation || typeof variation.content !== 'string' || !variation.content.trim()) continue;
+            const paragraphs = valueRef.current.map(node => getNodeText(null, node));
+            const current = componentsRef.current.find(c => c.id === unit.id);
+            const oldContent = current ? current.content : unit.content;
+            const range = locateUnitRange(paragraphs, oldContent);
+            if (!range) { lastProblem = 'locate: text not found in the editor'; break; }
+            // A unit inside one paragraph stays in it; one that covers several paragraphs keeps its paragraph breaks
+            const cleaned = range.first === range.last
+                ? variation.content.replace(/\s*\n+\s*/g, ' ').trim()
+                : variation.content.split(/\s*\n+\s*/).map(part => part.trim()).filter(Boolean).join('\n\n');
+            const problem = rewriteProblem({
+                unit, oldContent, newContent: cleaned,
+                otherUnits: combinedResultsRef.current.filter(u => u.id !== unit.id),
+                paragraphs: range.first === range.last ? paragraphs : [paragraphs.join('\n\n')],
+                index: range.first === range.last ? range.first : 0
+            });
+            if (!problem) return cleaned;
+            lastProblem = `check: ${problem}`;
+        }
+        throw new Error(lastProblem);
+    };
+
+    // cards: after Use, the other units that share the intent are checked against the new value: the model reads their texts and says
+    // which ones no longer agree with it. When some do, a window lists how each would be rewritten for the new value, and nothing is
+    // written until the user confirms: the rewrites are made in parallel and shown as they arrive, and "Apply selected" writes the ticked ones.
+    // When all of them still fit, nothing is shown.
+    const proposeIntentChange = async ({ sourceUnitId, sourceTitle, sourceOldContent, sourceNewContent, intentSelected, oldValue, chosenValue }) => {
         const targets = combinedResultsRef.current.filter(unit => unit.id !== sourceUnitId
             && (unit.linkedIntents || []).some(i => i.dimension === intentSelected.dimension && i.current_value !== intentSelected.current_value));
         if (targets.length === 0) return;
-        const appliedNotice = `Applied "${chosenValue}" to ${sourceTitle}.`;
-        setNotice(`${appliedNotice} Updating ${targets.length} other part${targets.length > 1 ? 's' : ''} that use this intent…`);
+        const id = propagationIdRef.current + 1;
+        propagationIdRef.current = id;
+        propagationRef.current = null;
+        setPropagation(null);
+        const started = Date.now();
         const draftBase = originalTextRef.current.replace(sourceOldContent, sourceNewContent);
-        const results = await Promise.allSettled(targets.map(async (unit) => {
-            const intentOthers = (unit.linkedIntents || [])
-                .filter(i => i.dimension !== intentSelected.dimension)
-                .map(i => ({ dimension: i.dimension, current_value: i.current_value }));
-            // The model sometimes returns more than the unit (neighbouring sentences); ask again once if so
-            let lastProblem = 'No version returned';
-            for (let attempt = 0; attempt < 2; attempt++) {
-                const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
-                    userName: globalUsername,
-                    taskId: globalTaskId,
-                    userTask,
-                    draftLatest: draftBase,
-                    componentCurrent: unit.content,
-                    intentSelected: {
-                        dimension: intentSelected.dimension,
-                        current_value: intentSelected.current_value,
-                        other_values: intentSelected.other_values
-                    },
-                    intentOthers
-                });
-                const variation = ((response.data && response.data.component_variations) || [])
-                    .find(v => v && v.intent_value === intentSelected.current_value);
-                if (!variation || typeof variation.content !== 'string' || !variation.content.trim()) continue;
-                const cleaned = variation.content.replace(/\s*\n+\s*/g, ' ').trim(); // keep it inside its paragraph
-                const paragraphs = valueRef.current.map(node => getNodeText(null, node));
-                const current = componentsRef.current.find(c => c.id === unit.id);
-                const oldContent = current ? current.content : unit.content;
-                const index = paragraphs.findIndex(text => !!locateUnitText(text, oldContent));
-                if (index === -1) { lastProblem = 'locate: text not found in the editor'; break; }
-                const problem = rewriteProblem({
-                    unit, oldContent, newContent: cleaned,
-                    otherUnits: combinedResultsRef.current.filter(u => u.id !== unit.id),
-                    paragraphs, index
-                });
-                if (!problem) return { unit, newContent: cleaned };
-                lastProblem = `check: ${problem}`;
+        const appliedNotice = `Applied "${chosenValue}" to ${sourceTitle}.`;
+        setNotice(`${appliedNotice} Checking ${targets.length} other part${targets.length > 1 ? 's' : ''} that share this intent…`);
+        // Which of them no longer agree with the new value? When the check itself fails every one of them is offered
+        let verdicts = {};
+        let checkFailed = false;
+        try {
+            const response = await axios.post('http://localhost:3001/intent-consistency-check', {
+                userTask: userTaskRef.current,
+                draftLatest: draftBase,
+                intentSelected: { dimension: intentSelected.dimension, current_value: intentSelected.current_value },
+                oldValue,
+                source: { title: sourceTitle, oldContent: sourceOldContent, newContent: sourceNewContent },
+                targets: targets.map(unit => ({ id: unit.id, title: unit.title, content: unit.content }))
+            });
+            ((response.data && response.data.results) || []).forEach(entry => { verdicts[entry.id] = entry; });
+        } catch (error) {
+            console.warn('Could not check the other parts:', error.message);
+            checkFailed = true;
+        }
+        if (propagationIdRef.current !== id) return; // another Use came in the meantime
+        const flagged = checkFailed ? targets : targets.filter(unit => !verdicts[unit.id] || verdicts[unit.id].needs_change);
+        logEvent({
+            unit_id: sourceUnitId, unit_title: sourceTitle, intent_dimension: intentSelected.dimension, event: 'consistency_checked',
+            chosen_value: chosenValue, checked_units: targets.map(unit => unit.id), inconsistent_units: flagged.map(unit => unit.id),
+            check_failed: checkFailed, reasons: Object.fromEntries(Object.values(verdicts).map(entry => [entry.id, entry.reason])), duration_ms: Date.now() - started
+        });
+        if (flagged.length === 0) {
+            setNotice(prev => (prev && prev.startsWith(appliedNotice) ? `${appliedNotice} The other ${targets.length > 1 ? 'parts that share' : 'part that shares'} this intent already fit${targets.length > 1 ? '' : 's'}.` : prev));
+            return;
+        }
+        // Every unit that shares the intent is listed (the user may want the change in one that already fits); the ones that do not fit are ticked
+        const flaggedIds = new Set(flagged.map(unit => unit.id));
+        const state = {
+            id, sourceUnitId, sourceTitle, chosenValue, intentSelected, started, checkFailed,
+            items: targets.map(unit => ({ unitId: unit.id, title: unit.title || unit.id, oldContent: unit.content, newContent: '', status: 'loading', checked: flaggedIds.has(unit.id), fits: !flaggedIds.has(unit.id), reason: '' }))
+        };
+        propagationRef.current = state;
+        setPropagation(state);
+        setNotice(prev => (prev && prev.startsWith(appliedNotice) ? `${appliedNotice} ${flagged.length} other part${flagged.length > 1 ? 's' : ''} may need the same change.` : prev));
+        logEvent({ unit_id: sourceUnitId, unit_title: sourceTitle, intent_dimension: intentSelected.dimension, event: 'propagation_prompted', chosen_value: chosenValue, units: targets.map(unit => unit.id), inconsistent_units: flagged.map(unit => unit.id) });
+        const update = (unitId, change) => {
+            if (propagationIdRef.current !== id || !propagationRef.current) return; // closed or replaced in the meantime
+            const next = { ...propagationRef.current, items: propagationRef.current.items.map(item => (item.unitId === unitId ? { ...item, ...change } : item)) };
+            propagationRef.current = next;
+            setPropagation(next);
+        };
+        await Promise.allSettled(targets.map(async (unit) => {
+            try {
+                update(unit.id, { status: 'ready', newContent: await proposeUnitRewrite(unit, intentSelected, draftBase) });
+            } catch (error) {
+                update(unit.id, { status: 'failed', checked: false, reason: String((error && error.message) || error) });
             }
-            throw new Error(lastProblem);
         }));
-        const rewritten = results.filter(r => r.status === 'fulfilled').map(r => r.value);
-        const applied = applyOtherUnitTexts(rewritten, intentSelected);
+    };
+
+    // The user's answer to the window: write the ticked rewrites (none when skipped) and log what was taken and what was not
+    const closePropagation = (apply) => {
+        const state = propagationRef.current;
+        if (!state) return;
+        propagationIdRef.current += 1; // rewrites that are still on their way are dropped
+        propagationRef.current = null;
+        setPropagation(null);
+        const chosen = apply ? state.items.filter(item => item.checked && item.status === 'ready') : [];
+        const snapshot = takeSnapshot(); // Cmd+Z takes the confirmed rewrites back
+        const applied = chosen.length > 0
+            ? applyOtherUnitTexts(chosen.map(item => ({ unit: combinedResultsRef.current.find(u => u.id === item.unitId) || { id: item.unitId, title: item.title, content: item.oldContent }, newContent: item.newContent })), state.intentSelected)
+            : [];
+        if (applied.length > 0) pushUndo(snapshot);
         const appliedIds = new Set(applied.map(a => a.id));
-        const failed = targets.filter(unit => !appliedIds.has(unit.id));
         const failedReasons = {};
-        targets.forEach((unit, i) => {
-            if (appliedIds.has(unit.id)) return;
-            failedReasons[unit.id] = results[i].status === 'rejected'
-                ? String((results[i].reason && results[i].reason.message) || results[i].reason)
-                : (applied.rejected && applied.rejected[unit.id]) || 'locate: text not found in the editor';
+        state.items.forEach(item => {
+            if (item.status === 'failed') failedReasons[item.unitId] = item.reason;
+            else if (chosen.some(c => c.unitId === item.unitId) && !appliedIds.has(item.unitId)) failedReasons[item.unitId] = (applied.rejected && applied.rejected[item.unitId]) || 'locate: text not found in the editor';
         });
         logEvent({
-            unit_id: sourceUnitId,
-            unit_title: sourceTitle,
-            intent_dimension: intentSelected.dimension,
+            unit_id: state.sourceUnitId,
+            unit_title: state.sourceTitle,
+            intent_dimension: state.intentSelected.dimension,
             event: 'intent_propagated',
-            chosen_value: chosenValue,
+            prompted: true,
+            check_failed: state.checkFailed,
+            chosen_value: state.chosenValue,
             updated_units: applied.map(a => a.id),
-            failed_units: failed.map(unit => unit.id),
+            accepted_units: applied.map(a => a.id),
+            skipped_units: state.items.filter(item => !appliedIds.has(item.unitId) && item.status !== 'failed' && !failedReasons[item.unitId]).map(item => item.unitId),
+            failed_units: Object.keys(failedReasons),
             failed_reasons: failedReasons,
-            duration_ms: Date.now() - started
+            duration_ms: Date.now() - state.started
         });
         const names = (list) => list.map(x => x.title || x.id).join(', ');
-        setNotice(prev => (prev && prev.startsWith(appliedNotice)
-            ? `${appliedNotice}${applied.length ? ` Also updated: ${names(applied)}.` : ''}${failed.length ? ` Couldn't update: ${names(failed)}.` : ''}`
-            : prev));
+        const failedNow = chosen.filter(item => !appliedIds.has(item.unitId));
+        if (applied.length > 0 || failedNow.length > 0) {
+            setNotice(`Applied "${state.chosenValue}" to ${state.sourceTitle}.${applied.length ? ` Also updated: ${names(applied)}.` : ''}${failedNow.length ? ` Couldn't update: ${names(failedNow)}.` : ''}`);
+        }
     };
 
     // cards: Regenerate. Ends the display, then asks the model whether the intent keeps being passed over:
@@ -3732,39 +3853,6 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         );
     }
 
-    if (!inEditor) {
-        if (!contentLoaded) return null;
-        return (
-            <div className="firstPage" style={{ height: 'calc(100vh - 64px)' }}>
-                        <div className="chatContainer" style={{ padding: '24px 24px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', height: '100vh - 112px' }}>
-                            <div className="ChatMessage_User" style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '16px' }}>
-                                <UserAvatarIcon size={40} style={{ marginRight: '8px' }} />
-                                <div className="ChatMessage_User_Content">
-                                    <p className="ChatMessage_User_Content_Label" style={{ color: '#000', fontSize: '16px', fontWeight: 'bold' }}>You</p>
-                                    <div className="ChatMessage_User_Content_Text">
-                                        {userTask}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="ChatMessage_Assistant" style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '16px', width: '100%' }}>
-                                <BotAvatarIcon size={40} style={{ marginRight: '8px', alignSelf: 'flex-start' }} />
-                                <div className="ChatMessage_Assistant_Content" style={{ flex: 1, minWidth: 0 }}>
-                                <p className="ChatMessage_User_Content_Label" style={{ color: '#000', fontSize: '16px', fontWeight: 'bold' }}>PersonaMail Bot</p>
-                                    <FactorPanel
-                                        variant="chat"
-                                        selection={factorSelection}
-                                        userTask={userTask}
-                                        hasDraft={false}
-                                        canGenerate={Boolean(userTask && globalTaskId)}
-                                        onGenerate={handleConfirmAndGenerate}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-            </div>
-        );
-    }
-
     return (
         <div
             className='emailEditor'
@@ -3788,7 +3876,6 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             }}
         >
             <FactorPanel
-                variant="sidebar"
                 topSlot={<PlaceholderTable
                         rows={draftGenerating ? [] : placeholders.map(field => ({ key: field.key, placeholder: `[${field.label}]`, value: placeholderValues[field.key] || '' }))}
                         generating={draftGenerating}
@@ -3799,7 +3886,6 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                     />}
                 selection={factorSelection}
                 userTask={userTask}
-                hasDraft={hasDraft}
                 canGenerate={Boolean(userTask && globalTaskId)}
                 onGenerate={factorSelection.handleGenerateDraft}
             />
@@ -3966,7 +4052,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                                             renderLeaf={renderLeaf}
                                             decorate={decorateSubjectPrefix}
                                             onKeyDown={handleKeyDown}
-                                            placeholder={loading ? 'Loading...' : draftGenerating ? '' : hasDraft ? 'Start typing...' : 'Select your options in the left sidebar, then click "Generate Email Draft".'}
+                                            placeholder={loading ? 'Loading...' : draftGenerating ? '' : hasDraft ? 'Start typing...' : 'Choose your options in the left sidebar, then click "Regenerate with These Options".'}
                                             style={{
                                                 // the last paragraph's box grows to the bottom (the frame around the scroller leaves 20px below it, the same
                                                 // as between the subject line and the box)
@@ -4183,6 +4269,55 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                 )}
             </Card>
             
+            {/* After Use on a style intent: the rewrites of the other units that share it, to be confirmed */}
+            <Modal
+                title="Apply this change to other parts?"
+                centered
+                open={!!propagation}
+                onCancel={() => closePropagation(false)}
+                maskClosable={false}
+                width={760}
+                footer={propagation ? [
+                    <Button key="skip" onClick={() => closePropagation(false)}>Skip</Button>,
+                    <Button key="apply" type="primary" disabled={!propagation.items.some(item => item.checked && item.status === 'ready')} onClick={() => closePropagation(true)}>
+                        {`Apply selected (${propagation.items.filter(item => item.checked && item.status === 'ready').length})`}
+                    </Button>
+                ] : null}
+            >
+                {propagation && (
+                    <div className="propagation-list">
+                        <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+                            {propagation.items.map(item => (
+                                <div key={item.unitId} className="propagation-item" style={{ border: '1px solid #f0f0f0', borderRadius: '8px', padding: '10px 12px', marginBottom: '10px' }}>
+                                    <Checkbox
+                                        checked={item.checked}
+                                        disabled={item.status !== 'ready'}
+                                        onChange={e => {
+                                            const next = { ...propagationRef.current, items: propagationRef.current.items.map(other => (other.unitId === item.unitId ? { ...other, checked: e.target.checked } : other)) };
+                                            propagationRef.current = next;
+                                            setPropagation(next);
+                                        }}
+                                    >
+                                        <strong>{item.title}</strong>
+                                    </Checkbox>
+                                    {item.status === 'loading' && (
+                                        <div style={{ marginTop: '8px', color: '#8c8c8c' }}><Spin size="small" /> <span style={{ marginLeft: '8px' }}>Writing a version…</span></div>
+                                    )}
+                                    {item.status === 'failed' && (
+                                        <div style={{ marginTop: '8px', color: '#cf1322' }}>{`Could not write a version for this part (${item.reason}). It stays as it is.`}</div>
+                                    )}
+                                    {item.status === 'ready' && (
+                                        <div style={{ marginTop: '8px' }}>
+                                            <div style={{ color: '#8c8c8c', textDecoration: 'line-through', marginBottom: '6px', whiteSpace: 'pre-wrap' }}>{item.oldContent}</div>
+                                            <div style={{ whiteSpace: 'pre-wrap' }}>{renderChangedSentences([item.oldContent], item.newContent)}</div>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </Modal>
             {/* AI Add Content Preview Modal */}
             {SHOW_ASK_AI && (
             <Modal

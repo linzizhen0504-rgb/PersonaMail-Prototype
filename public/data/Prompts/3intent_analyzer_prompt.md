@@ -31,7 +31,9 @@ Your goal is to make your writing strategy explicit and editable for the user. Y
    * **Every alternative must be a different way of saying the same thing in the email. Never propose an alternative that leaves the content out or says nothing** (for example "No mention", "Skip it", "None", "Omit", "Not included"). The user can delete a sentence without help, so an alternative has to be a rewrite that still says something.  
    * **Example:** For "Salary Discussion Strategy" with primary value "Cautious with justification", alternatives might include "Direct and explicit", "Defer to later conversation", or "Phrase it as a question".
 
-4. **Overall:**  
+4. **Wording:** Keep every `dimension` and every value short and plain. Never use a slash ("/") in a dimension or a value, and never join two ideas in one value: choose one.
+
+5. **Overall:**  
     
    * Generate approximately 3-5 of these `[Dimension, Value]` pairs.  
    * Focus on the most important and nuanced decisions. Avoid generic dimensions like "Greeting" unless there's a specific, non-obvious choice to be made.  
