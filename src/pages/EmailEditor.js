@@ -469,6 +469,7 @@ const EmailEditor = () => {
     const undoRedoRef = useRef(() => false);
     const hoveredUnitRef = useRef(null);
     const pendingCaretRef = useRef(null);
+    const useInProgressRef = useRef(false);
     const closeRewriteBoxRef = useRef(() => {});
     const editorScrollRef = useRef(null);
     // cards: the fields the draft still asks for ([{ key, label }], each piece of information once even when it occurs in
@@ -4755,7 +4756,18 @@ const addDimensionsToValue = (editorValue, componentContent, componentId, linked
         const oldNodeText = getUnitNodeText(cards.unitId, value);
         const replacedText = oldNodeText === null ? newContent : oldNodeText.replace(component.content, newContent);
 
+        // Slate reports the deselect a moment later with the content it has now. Replacing the unit in the same tick would let that
+        // report put the old text back (the caret is in the unit after a click), so the replacement comes after it
+        if (useInProgressRef.current) return;
+        useInProgressRef.current = true;
         deselectEditor();
+        setTimeout(() => {
+            useInProgressRef.current = false;
+            finishCardUse(cards, item, component, newContent, intentSelected, replacedText);
+        }, 0);
+    };
+
+    const finishCardUse = (cards, item, component, newContent, intentSelected, replacedText) => {
         const applied = replaceComponentText(cards.unitId, newContent, intentSelected);
         if (!applied) return;
 
