@@ -29,7 +29,7 @@ We started from the authors' released code and redesigned the interface. The ori
 | **Communicative Units** (Section 4.2.1): splitting the email into functional components such as Opening Salutation, Statement of Purpose, Call to Action | Kept, including the authors' prompt. |
 | **Intents and intent-driven modification** (Sections 4.2.2–4.2.3): the Intent Analyzer, Unit–Intent Linker and Intent-Driven Rewriter pipeline | Kept, with the changes listed under "Intent pipeline" below. |
 | **Adaptive Stylebook and QuickFix** (Section 4.3.2), and the local AI tools (rewrite, expand, shorten) | Not used. The old selection toolbar is replaced by the "Describe changes" box (see below), which uses the authors' rewrite prompt. |
-| The prompt templates in `public/data/Prompts/` and the Express backend `src/pages/serverGM.js` | Kept, with new prompts (version values, factor selection, consistency check) and new or changed endpoints (`/select-factors`, `/intent-consistency-check`, `/intent-regenerate-values`). |
+| The prompt templates in `public/data/Prompts/` and the Express backend in `server/` | Kept, with new prompts (version values, factor selection, consistency check) and new or changed endpoints (`/select-factors`, `/intent-consistency-check`, `/intent-regenerate-values`). |
 
 ### What we do not use
 
@@ -92,7 +92,7 @@ The app has one interface. Each intent is a pill; clicking a pill shows up to th
 
 ### Preference model
 
-A Python service in `model_service/` (FastAPI, port 3003) decides which values to show and in what order. It runs locally and uses the `all-MiniLM-L6-v2` sentence embedding.
+A Python service in `model_service/` (FastAPI, port 3003) decides which values to show and in what order. It runs locally and uses the `all-MiniLM-L6-v2` sentence embedding. The page does not call it: it asks the backend (`/preference/...`), which has a short timeout and, when the service is down or answers nothing, gives a random order of the versions (`ordering: fallback_random`, `available: false`).
 
 **Per-participant value preference (Beta-Bernoulli).** For each participant, email context, intent dimension and value, the model keeps `[accept, reject]` counts:
 
@@ -183,7 +183,7 @@ npm start
 
 ```bash
 # Terminal 2: backend, port 3001
-node src/pages/serverGM.js
+npm run server        # the same as: node server/index.js (the old command, node src/pages/serverGM.js, still works)
 ```
 
 ```bash
@@ -192,16 +192,34 @@ cd model_service && source .venv/bin/activate
 uvicorn app:app --port 3003
 ```
 
-Restart the backend after changing `serverGM.js` or `.env`.
+Restart the backend after changing code in `server/` or the `.env` file. The settings you can change are listed in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#settings).
 
 When all three are running, open **http://localhost:3000/?pid=P01** in the browser.
 
-### 5. Test the model service
+### 5. Tests
 
 ```bash
+npm run test:server    # backend: every endpoint against a fake model, every module, the architecture rules (no services needed)
+npm test               # page: src/api against the contract, src/domain
 cd model_service && source .venv/bin/activate
-pytest            # fast tests with a fake embedder
-pytest -m slow    # also loads the real MiniLM model
+pytest                 # preference model, fast tests with a fake embedder
+pytest -m slow         # also loads the real MiniLM model
+```
+
+The end-to-end scripts (a real browser and the real model, slow) are in `tests/e2e/`; see `tests/e2e/README.md`.
+
+## Project structure
+
+```
+src/pages, src/App.js   screens and the editor
+src/domain/             pure logic of the page (finding a unit in the email, checking a rewrite, placeholders)
+src/api/                the only place the page calls the backend from
+contracts/schemas/      the http contract: one JSON Schema file per endpoint
+server/                 the backend: modules behind written interfaces (llm, prompts, session, preference, logging, email, http)
+model_service/          the preference model (Python)
+public/data/Prompts/    the prompt files
+tests/e2e/              end-to-end scripts
+docs/ARCHITECTURE.md    how the parts fit, the rules, how to replace a model provider or a store, what is still to do
 ```
 
 ## Using the Prototype
