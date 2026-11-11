@@ -4,7 +4,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const app = express();
-const port = 3001;
+const port = Number(process.env.PORT) || 3001;
 
 require('dotenv').config({ path: path.join(__dirname, '../../.env') }); // 从项目根目录的 .env 读取环境变量
 const geminiApiKey = process.env.GEMINI_API_KEY; // Gemini API Key
