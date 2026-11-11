@@ -12,9 +12,9 @@ def check(n,ok,d=''): R.append(bool(ok)); print(('PASS ' if ok else 'FAIL ')+n,d
 DRAFT="Subject: A note\n\nDear Vision,\n\nI love you and I am so sorry for everything.\n\nI hope we can talk soon.\n\nWith all my love,\n\nWanda"
 COMPS=[{"id":"subject_line","title":"Subject Line","content":"Subject: A note"},{"id":"opening","title":"Opening","content":"Dear Vision,"},
  {"id":"apology","title":"Apology","content":"I love you and I am so sorry for everything."},{"id":"call_to_action","title":"Call to Action","content":"I hope we can talk soon."},
- {"id":"valediction","title":"Valediction","content":"With all my love,\n\nWanda"}]
+ {"id":"closing","title":"Closing","content":"With all my love,\n\nWanda"}]
 INTENTS=[{"dimension":"Level of Warmth","current_value":"Deeply affectionate","other_values":["Warm and caring","Polite and neutral","Brief and calm"]}]
-LINKS=[{"intent_dimension":"Level of Warmth","component_id":c} for c in ("apology","call_to_action","valediction")]
+LINKS=[{"intent_dimension":"Level of Warmth","component_id":c} for c in ("apology","call_to_action","closing")]
 def rewriter(route):
     d=json.loads(route.request.post_data); i=d['intentSelected']; vals=[i['current_value']]+i['other_values']
     cur=d['componentCurrent']
@@ -40,7 +40,7 @@ with sync_playwright() as p:
     pg.wait_for_function("!document.querySelector('.draft-generating-page') && !document.querySelector('button.ant-btn-loading')", timeout=120000); pg.wait_for_timeout(1500)
     try: pg.get_by_text('Got it').click(timeout=5000)
     except Exception: pass
-    check('the sign-off unit covers two paragraphs', pg.locator(f'{U}[data-unit="valediction"]').count()==2, str(pg.locator(f'{U}[data-unit="valediction"]').count()))
+    check('the sign-off unit covers two paragraphs', pg.locator(f'{U}[data-unit="closing"]').count()==2, str(pg.locator(f'{U}[data-unit="closing"]').count()))
     pt=pg.locator(f'{U}[data-unit="apology"]').first.evaluate("e=>{const r=e.getClientRects()[0];return [r.left+r.width/2,r.top+r.height/2]}")
     pg.mouse.click(pt[0],pt[1]); pg.wait_for_timeout(900)
     pg.wait_for_function("document.querySelector('.vc-card')", timeout=60000); pg.wait_for_timeout(500)
@@ -48,11 +48,11 @@ with sync_playwright() as p:
     pg.locator(MODAL).wait_for(timeout=30000); pg.wait_for_timeout(1500)
     items=pg.locator('.propagation-item')
     names=[items.nth(i).locator('strong').inner_text() for i in range(items.count())]
-    check('the sign-off is listed with a rewrite, not a failure', 'Valediction' in names and pg.locator(MODAL).get_by_text('Could not write a version').count()==0, str(names))
+    check('the sign-off is listed with a rewrite, not a failure', 'Closing' in names and pg.locator(MODAL).get_by_text('Could not write a version').count()==0, str(names))
     pg.locator(MODAL).get_by_role('button', name='Apply selected').click(); pg.wait_for_timeout(2500)
     paras=pg.evaluate("()=>[...document.querySelectorAll('[data-slate-editor=\"true\"] [data-slate-node=\"element\"]')].map(e=>e.innerText.trim()).filter(Boolean)")
     check('the two paragraphs of the sign-off were rewritten in place', 'Warmly,' in paras and 'Wanda' in paras and not any('With all my love' in x for x in paras), str(paras[-4:]))
-    check('the sign-off is still one unit over two paragraphs', pg.locator(f'{U}[data-unit="valediction"]').count()==2)
+    check('the sign-off is still one unit over two paragraphs', pg.locator(f'{U}[data-unit="closing"]').count()==2)
     check('Cmd+Z takes it back', True)
     pg.mouse.click(5,5); pg.keyboard.press('Meta+z'); pg.wait_for_timeout(1500)
     paras=pg.evaluate("()=>[...document.querySelectorAll('[data-slate-editor=\"true\"] [data-slate-node=\"element\"]')].map(e=>e.innerText.trim()).filter(Boolean)")

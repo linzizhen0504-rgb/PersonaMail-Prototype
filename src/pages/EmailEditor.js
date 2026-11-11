@@ -10,9 +10,11 @@ import FactorPanel, { useFactorSelection } from './FactorPanel';
 import SelectionRewriteBox, { CARD_BORDER_RADIUS } from './SelectionRewriteBox';
 import PlaceholderTable from './PlaceholderTable';
 import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholderFields, containsPlaceholder, removePlaceholder } from '../domain/placeholders';
-import { plainText, locateUnitText, locateUnitRange, changedSentenceParts, levenshtein, shuffle } from '../domain/text';
+import { locateUnitText, locateUnitRange, changedSentenceParts, levenshtein, shuffle } from '../domain/text';
 import { rewriteProblem } from '../domain/rewriteChecks';
 import { getNodeText, joinSelectedBlocks } from '../domain/nodes';
+import { propagationTargets, markUnit, highlightUnit, replaceUnit, shapeUnitText } from '../domain/units';
+import { PAGE_TOP_PADDING, TITLE_ROW_HEIGHT, TITLE_GAP, EDITOR_RADIUS, FRAME_TOP, FRAME_BOTTOM, SUBJECT_GAP, SUBJECT_MIN_HEIGHT, TOOLBAR_PAD_TOP, TOOLBAR_PAD_BOTTOM, TOOLBAR_BUTTON_PAD_Y, INTENTS_TOP_PADDING, EDITOR_ROW_HEIGHT } from '../layout';
 import { RobotIcon } from '../icons';
 
 
@@ -151,6 +153,11 @@ const renderChangedSentences = (oldTexts, newText) => changedSentenceParts(oldTe
     part.changed ? <span key={i} style={{ background: '#e3f5ea', color: '#137a3e', borderRadius: '3px', padding: '1px 2px' }}>{part.text}</span> : part.text
 ));
 
+// The space between the top of the grey frame of the body and its content, and between the subject line and the body card: kept small so
+// that the body has the room (the frame ends where the intents begin)
+// The editor box starts higher (the titles moved up, the box is close under its title); its height grows by what was won, so that it
+// still ends where the intents begin
+
 // cards: the scrollbar of the body, drawn over the right side of the body card. The native scrollbar is hidden so that it takes no
 // column of its own; this one sits below the fixed subject line and toolbar and never covers them.
 const OverlayScrollbar = ({ scrollerRef }) => {
@@ -168,7 +175,7 @@ const OverlayScrollbar = ({ scrollerRef }) => {
         const height = Math.max(28, track * (scroller.clientHeight / scroller.scrollHeight));
         thumb.style.display = 'block';
         thumb.style.height = `${height}px`;
-        thumb.style.top = `${16 + headHeight + 6 + (scroller.scrollTop / scrollable) * (track - height)}px`;
+        thumb.style.top = `${FRAME_TOP + headHeight + 6 + (scroller.scrollTop / scrollable) * (track - height)}px`;
     }, [scrollerRef]);
     const flash = useCallback(() => {
         const thumb = thumbRef.current;
@@ -1067,98 +1074,8 @@ const EmailEditor = () => {
     };
 
     // 改进的文本查找函数，支持精确匹配和跨段落搜索
-    const findTextInEditor = (searchText, editorValue) => {
-        if (!searchText || !editorValue) return null;
-
-        // 构建完整的文本内容和位置映射
-        let fullText = '';
-        let nodeMap = [];
-        let currentPos = 0;
-        
-        editorValue.forEach((node, nodeIndex) => {
-            const nodeText = getNodeText(null, node);
-            const nodeStart = currentPos;
-            const nodeEnd = currentPos + nodeText.length;
-            
-            nodeMap.push({
-                nodeIndex,
-                nodeText,
-                start: nodeStart,
-                end: nodeEnd,
-                node
-            });
-            
-            fullText += nodeText;
-            currentPos = nodeEnd;
-            
-            // 段落间添加分隔符
-            if (nodeIndex < editorValue.length - 1) {
-                fullText += '\n\n';
-                currentPos += 2;
-            }
-        });
-        
-        // 更精确的文本标准化
-        const normalizeForSearch = (text) => {
-            return text
-                .replace(/[\r\n]+/g, ' ')  // 换行转空格
-                .replace(/\s+/g, ' ')      // 多空格转单空格
-                .trim();
-        };
-        
-        const searchNormalized = normalizeForSearch(searchText).toLowerCase();
-        const fullNormalized = normalizeForSearch(fullText).toLowerCase();
-        
-        console.log('Searching for:', searchNormalized);
-        console.log('In text:', fullNormalized.substring(0, 200) + '...');
-        
-        // 精确匹配
-        let index = fullNormalized.indexOf(searchNormalized);
-        
-        // 如果精确匹配失败，尝试更宽松的匹配
-        if (index === -1) {
-            // 移除标点符号再试
-            const searchClean = searchNormalized.replace(/[^\w\s]/g, '');
-            const fullClean = fullNormalized.replace(/[^\w\s]/g, '');
-            index = fullClean.indexOf(searchClean);
-            
-            if (index !== -1) {
-                // 映射回原始位置
-                let charCount = 0;
-                for (let i = 0; i < fullNormalized.length; i++) {
-                    if (fullNormalized[i].match(/[\w\s]/)) {
-                        if (charCount === index) {
-                            index = i;
-                            break;
-                        }
-                        charCount++;
-                    }
-                }
-            }
-        }
-        
-        if (index === -1) {
-            console.log('Text not found');
-            return null;
-        }
-        
-        const endIndex = index + searchNormalized.length;
-        console.log('Found match at normalized position:', index, 'to', endIndex);
-        
-        return {
-            start: index,
-            end: endIndex,
-            fullText: fullNormalized,
-            originalText: fullText,
-            nodeMap,
-            originalSearchText: searchText
-        };
-    };
-
+    // The unit shown as selected: its text is highlighted wherever it is, also over several paragraphs
     const applyHighlightingToValue = (editorValue, componentContent, componentId) => {
-        console.log('Applying highlighting for component:', componentId);
-        console.log('Component content:', componentContent);
-        
         // Validate inputs
         if (!editorValue || !Array.isArray(editorValue) || !componentContent || !componentId) {
             console.warn('Invalid inputs for highlighting');
@@ -1172,187 +1089,7 @@ const EmailEditor = () => {
         } catch (error) {
             console.warn('Could not clear editor selection:', error);
         }
-
-        // 清除所有highlight属性
-        const cleanValue = editorValue.map(node => {
-            if (!node || typeof node !== 'object') {
-                return { type: 'paragraph', children: [{ text: '' }] };
-            }
-            return {
-                ...node,
-                children: Array.isArray(node.children) ? node.children.map(child => {
-                    if (typeof child === 'string') {
-                        return child;
-                    }
-                    if (!child || typeof child !== 'object') {
-                        return { text: '' };
-                    }
-                    const { highlight, ...cleanChild } = child;
-                    return cleanChild;
-                }) : [{ text: '' }]
-            };
-        });
-    
-        // The position search below maps normalised text back to the editor and can drift or miss. As a safety net,
-        // find the unit's text inside a single paragraph (tolerant of whitespace and quote style) and highlight that.
-        const highlightWithinParagraph = () => {
-            let found = -1;
-            let span = null;
-            cleanValue.forEach((node, i) => {
-                if (found !== -1) return;
-                const match = locateUnitText(getNodeText(null, node), componentContent);
-                if (match) { found = i; span = match; }
-            });
-            if (found === -1) return null;
-            return cleanValue.map((node, i) => {
-                if (i !== found) return node;
-                const text = getNodeText(null, node);
-                const meta = { componentId };
-                const children = [];
-                if (text.slice(0, span.start)) children.push({ text: text.slice(0, span.start), ...meta });
-                children.push({ text: text.slice(span.start, span.end), highlight: true, ...meta });
-                if (text.slice(span.end)) children.push({ text: text.slice(span.end), ...meta });
-                return { ...node, children };
-            });
-        };
-        // Is the highlighted text really the unit's text?
-        const highlightMatches = (candidate) => {
-            const highlighted = candidate.map(node => (Array.isArray(node.children)
-                ? node.children.filter(child => child && child.highlight).map(child => child.text).join('') : '')).join('');
-            const plainHighlighted = plainText(highlighted);
-            const plainUnit = plainText(componentContent);
-            return plainHighlighted.length > 0 && (plainHighlighted === plainUnit
-                || plainHighlighted.includes(plainUnit) || plainUnit.includes(plainHighlighted));
-        };
-
-        const position = findTextInEditor(componentContent, cleanValue);
-        if (!position) {
-            console.log('Position not found, trying within paragraphs');
-            return highlightWithinParagraph() || cleanValue;
-        }
-    
-        console.log('Found position:', position);
-        
-        // 使用新的nodeMap进行精确位置映射
-        const { nodeMap, originalText } = position;
-        const highlightStart = position.start;
-        const highlightEnd = position.end;
-        
-        // 将标准化位置映射回原始文本位置
-        const mapNormalizedToOriginal = (normalizedPos) => {
-            let originalPos = 0;
-            let normalizedCount = 0;
-            
-            for (let i = 0; i < originalText.length; i++) {
-                const char = originalText[i];
-                const normalizedChar = char.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ');
-                
-                if (normalizedCount === normalizedPos) {
-                    return originalPos;
-                }
-                
-                if (normalizedChar && normalizedChar !== ' ' || (normalizedChar === ' ' && position.fullText[normalizedCount] === ' ')) {
-                    normalizedCount++;
-                }
-                originalPos++;
-            }
-            return originalPos;
-        };
-        
-        const originalStart = mapNormalizedToOriginal(highlightStart);
-        const originalEnd = mapNormalizedToOriginal(highlightEnd);
-        
-        console.log('Mapped positions - original:', originalStart, 'to', originalEnd);
-        
-        const affectedNodes = [];
-        
-        nodeMap.forEach(nodeInfo => {
-            const nodeStart = nodeInfo.start;
-            const nodeEnd = nodeInfo.end;
-            
-            // 检查是否与高亮区域重叠
-            if (!(nodeEnd <= originalStart || nodeStart >= originalEnd)) {
-                const overlapStart = Math.max(nodeStart, originalStart);
-                const overlapEnd = Math.min(nodeEnd, originalEnd);
-                
-                affectedNodes.push({
-                    ...nodeInfo,
-                    overlapStart: overlapStart - nodeStart,
-                    overlapEnd: overlapEnd - nodeStart
-                });
-            }
-        });
-        
-        console.log('Affected nodes:', affectedNodes);
-        
-        if (affectedNodes.length === 0) {
-            return highlightWithinParagraph() || cleanValue;
-        }
-        
-        // 应用高亮到受影响的节点
-        const newValue = cleanValue.map((node, nodeIndex) => {
-            const affectedNode = affectedNodes.find(n => n.nodeIndex === nodeIndex);
-            if (!affectedNode) {
-                return node;
-            }
-            
-            const { nodeText, overlapStart, overlapEnd } = affectedNode;
-            
-            // 确保边界有效
-            const validStart = Math.max(0, Math.min(overlapStart, nodeText.length));
-            const validEnd = Math.max(validStart, Math.min(overlapEnd, nodeText.length));
-            
-            console.log(`Node ${nodeIndex}: highlighting from ${validStart} to ${validEnd} in "${nodeText}"`);
-            
-            // 分割文本
-            const beforeText = nodeText.substring(0, validStart);
-            const highlightText = nodeText.substring(validStart, validEnd);
-            const afterText = nodeText.substring(validEnd);
-            
-            const newChildren = [];
-            
-            // 保留现有属性的辅助函数
-            const preserveExistingProps = (text) => {
-                const existingChild = node.children.find(child => 
-                    child.text && child.text.includes(text)
-                );
-                return existingChild ? { componentId: existingChild.componentId } : {};
-            };
-            
-            if (beforeText) {
-                newChildren.push({ 
-                    text: beforeText,
-                    ...preserveExistingProps(beforeText)
-                });
-            }
-            
-            if (highlightText) {
-                newChildren.push({ 
-                    text: highlightText, 
-                    highlight: true, 
-                    componentId: componentId
-                });
-            }
-            
-            if (afterText) {
-                newChildren.push({ 
-                    text: afterText,
-                    ...preserveExistingProps(afterText)
-                });
-            }
-            
-            return {
-                ...node,
-                children: newChildren.length > 0 ? newChildren : [{ text: nodeText }]
-            };
-        });
-        
-        if (!highlightMatches(newValue)) {
-            console.log('Highlight does not match the unit text, trying within paragraphs');
-            return highlightWithinParagraph() || newValue;
-        }
-        console.log('Applied highlighting, returning new value');
-        return newValue;
+        return highlightUnit(editorValue, componentContent, componentId);
     };
     // 修复后的高亮应用函数
     const applyHighlighting = (componentContent, componentId) => {
@@ -1485,7 +1222,7 @@ const ToolbarButton = ({ format, children, isActive, onMouseDown, compact }) => 
             className={compact ? 'tb-compact-button' : undefined}
             onMouseDown={onMouseDown}
             style={{
-                padding: compact ? '4px 10px' : '8px 12px',
+                padding: compact ? `${TOOLBAR_BUTTON_PAD_Y}px 10px` : '8px 12px',
                 border: compact ? '1px solid transparent' : '1px solid #d9d9d9',
                 background: isActive ? (compact ? '#e6efff' : '#1890ff') : (compact ? 'transparent' : '#fff'),
                 color: isActive ? (compact ? '#2f6fde' : '#fff') : '#000',
@@ -1513,7 +1250,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         <div
             contentEditable={compact ? false : undefined}
             style={compact ? {
-                padding: '8px 0 6px',
+                padding: `${TOOLBAR_PAD_TOP}px 0 ${TOOLBAR_PAD_BOTTOM}px`,
                 margin: '0 0 0 -10px', // the first button's letter lines up with the text below (the button has 10px of padding)
                 display: 'flex',
                 flexWrap: 'wrap',
@@ -1669,7 +1406,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         return offset;
     };
     const BOX_BORDER = '1px solid #d9d9d9';
-    const BOX_RADIUS = 8; // same as the outer editor card (antd Card)
+    const BOX_RADIUS = EDITOR_RADIUS; // same as the outer editor card (antd Card)
     const renderCopyButton = (kind) => (
         <Button
             size="small"
@@ -1687,7 +1424,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
     const renderBodyHeader = () => <Toolbar compact trailing={renderCopyButton('body')} />;
     // cards: the grey frame around the scrolling area (the 16px sides and the space above and below)
     const EditorFrame = 'div';
-    const frameProps = { className: 'card-frame', style: { flex: 1, minHeight: 0, background: '#f5f6f8', padding: '16px 16px 20px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', position: 'relative' } };
+    const frameProps = { className: 'card-frame', style: { flex: 1, minHeight: 0, background: '#f5f6f8', padding: `${FRAME_TOP}px 16px ${FRAME_BOTTOM}px`, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', position: 'relative' } };
     // The scrollbar track starts below the fixed head: its height is handed to the stylesheet
     useEffect(() => {
         const scroller = editorScrollRef.current;
@@ -1696,8 +1433,8 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         const subject = scroller.querySelector('.subject-row');
         const frame = scroller.parentElement;
         scroller.style.setProperty('--head-h', `${head ? head.offsetHeight : 0}px`);
-        // the card starts 20px under the subject line
-        frame.style.setProperty('--card-top', `${subject ? subject.offsetHeight + 20 : 0}px`);
+        // the card starts a little under the subject line
+        frame.style.setProperty('--card-top', `${subject ? subject.offsetHeight + SUBJECT_GAP : 0}px`);
         frame.setAttribute('data-card', sectionLayout() ? '1' : '0');
     });
     // The editor content is a flat list of paragraphs, so a box is drawn piece by piece: the first paragraph carries the top
@@ -1723,7 +1460,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                     >
                         <div
                             className="subject-row"
-                            style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: BOX_BORDER, margin: '0 4px 20px', minHeight: '44px' }}
+                            style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: BOX_BORDER, margin: `0 4px ${SUBJECT_GAP}px`, minHeight: `${SUBJECT_MIN_HEIGHT}px` }}
                         >
                             <span contentEditable={false} style={{ color: '#8c8c8c', fontSize: '15px', userSelect: 'none', flex: 'none' }}>Subject:</span>
                             <div style={{ flex: 1, minWidth: 0 }}>{renderPlainElement({ attributes: {}, children, element })}</div>
@@ -1779,139 +1516,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
     };
 
 
-// cards: every unit is clickable, also one without intents. The unit's text is found inside a single paragraph (tolerant of
-// whitespace and quote style) and only that stretch is marked; leaves already marked for other units of the same paragraph stay
-// as they are. A unit that runs over several paragraphs goes through markUnitAcrossParagraphs.
-const markUnitInValue = (editorValue, content, componentId) => {
-    const meta = { componentId };
-    let found = -1;
-    let span = null;
-    editorValue.forEach((node, i) => {
-        if (found !== -1 || !node || !Array.isArray(node.children)) return;
-        const match = locateUnitText(getNodeText(null, node), content);
-        if (match) { found = i; span = match; }
-    });
-    if (found === -1) return markUnitAcrossParagraphs(editorValue, content, componentId);
-    return editorValue.map((node, i) => {
-        if (i !== found) return node;
-        const children = [];
-        let offset = 0;
-        node.children.forEach(child => {
-            const text = child.text || '';
-            const start = offset;
-            const end = offset + text.length;
-            offset = end;
-            const from = Math.max(span.start, start) - start;
-            const to = Math.min(span.end, end) - start;
-            if (to <= from || child.componentId) { children.push(child); return; }
-            if (from > 0) children.push({ ...child, text: text.slice(0, from) });
-            children.push({ ...child, ...meta, text: text.slice(from, to) });
-            if (to < text.length) children.push({ ...child, text: text.slice(to) });
-        });
-        return { ...node, children };
-    });
-};
 
-// 3. 新增：为特定component内容添加dimension标记的函数
-const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) => {
-    const position = findTextInEditor(componentContent, editorValue);
-    if (!position) {
-        console.log('Position not found for component:', componentId);
-        return editorValue;
-    }
-
-    // 使用新的精确位置映射
-    const { nodeMap, originalText } = position;
-    const highlightStart = position.start;
-    const highlightEnd = position.end;
-    
-    // 将标准化位置映射回原始文本位置
-    const mapNormalizedToOriginal = (normalizedPos) => {
-        let originalPos = 0;
-        let normalizedCount = 0;
-        
-        for (let i = 0; i < originalText.length; i++) {
-            const char = originalText[i];
-            const normalizedChar = char.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ');
-            
-            if (normalizedCount === normalizedPos) {
-                return originalPos;
-            }
-            
-            if (normalizedChar && normalizedChar !== ' ' || (normalizedChar === ' ' && position.fullText[normalizedCount] === ' ')) {
-                normalizedCount++;
-            }
-            originalPos++;
-        }
-        return originalPos;
-    };
-    
-    const originalStart = mapNormalizedToOriginal(highlightStart);
-    const originalEnd = mapNormalizedToOriginal(highlightEnd);
-    
-    // 找到受影响的节点
-    const affectedNodes = [];
-    
-    nodeMap.forEach(nodeInfo => {
-        const nodeStart = nodeInfo.start;
-        const nodeEnd = nodeInfo.end;
-        
-        if (!(nodeEnd <= originalStart || nodeStart >= originalEnd)) {
-            const overlapStart = Math.max(nodeStart, originalStart);
-            const overlapEnd = Math.min(nodeEnd, originalEnd);
-            
-            affectedNodes.push({
-                ...nodeInfo,
-                overlapStart: overlapStart - nodeStart,
-                overlapEnd: overlapEnd - nodeStart
-            });
-        }
-    });
-
-    if (affectedNodes.length === 0) {
-        return editorValue;
-    }
-
-    // 为受影响的节点添加dimension标记
-    const newValue = editorValue.map((node, nodeIndex) => {
-        const affectedNode = affectedNodes.find(n => n.nodeIndex === nodeIndex);
-        if (!affectedNode) {
-            return node;
-        }
-        
-        const { nodeText, overlapStart, overlapEnd } = affectedNode;
-        
-        // 确保边界有效
-        const validStart = Math.max(0, Math.min(overlapStart, nodeText.length));
-        const validEnd = Math.max(validStart, Math.min(overlapEnd, nodeText.length));
-        
-        // 分割文本并添加dimension标记
-        const beforeText = nodeText.substring(0, validStart);
-        const dimensionText = nodeText.substring(validStart, validEnd);
-        const afterText = nodeText.substring(validEnd);
-
-        const newChildren = [];
-        if (beforeText) {
-            newChildren.push({ text: beforeText });
-        }
-        if (dimensionText) {
-            newChildren.push({ 
-                text: dimensionText,
-                componentId: componentId
-            });
-        }
-        if (afterText) {
-            newChildren.push({ text: afterText });
-        }
-
-        return {
-            ...node,
-            children: newChildren.length > 0 ? newChildren : [{ text: nodeText }]
-        };
-    });
-
-    return newValue;
-};
     
 
     
@@ -1930,10 +1535,10 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                     40% { transform: translateY(-6px); opacity: 1; }
                 }
             `}</style>
-            <Row style={{ borderBottom: '1px solid #d9d9d9', height: '500px', overflow: 'hidden' }}>
+            <Row style={{ borderBottom: '1px solid #d9d9d9', height: `${EDITOR_ROW_HEIGHT}px`, overflow: 'hidden' }}>
                 <Col span={18} style={{ height: '100%' }}>
-                    <div style={{ background: '#f5f6f8', height: '100%', boxSizing: 'border-box', padding: '16px 16px 20px', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: BOX_BORDER, margin: '0 4px 20px', minHeight: '44px' }}>
+                    <div style={{ background: '#f5f6f8', height: '100%', boxSizing: 'border-box', padding: `${FRAME_TOP}px 16px ${FRAME_BOTTOM}px`, display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: BOX_BORDER, margin: `0 4px ${SUBJECT_GAP}px`, minHeight: `${SUBJECT_MIN_HEIGHT}px` }}>
                             <span style={{ color: '#8c8c8c', fontSize: '15px', flex: 'none' }}>Subject:</span>
                             <div style={{ flex: 1 }} />
                             <Button size="small" type="text" icon={<CopyOutlined />} disabled style={{ color: '#8c8c8c' }}>Copy</Button>
@@ -1960,7 +1565,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                 </Col>
                 <Col span={6} style={{ height: '100%' }}>
                     <div style={{ padding: '16px', borderLeft: '1px solid #f0f0f0', background: '#fff', height: '100%', boxSizing: 'border-box' }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '16px', fontSize: '14px', color: '#333', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '12px', fontSize: '14px', color: '#595959', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                             <span>Email Components</span>
                             <Button size="small" disabled>Regenerate</Button>
                         </div>
@@ -1986,7 +1591,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             if (intent) handleDimensionSelect(intent);
         };
         return (
-            <div className='intentCards' style={{ padding: '8px 16px 16px' }}>
+            <div className='intentCards' style={{ padding: `${INTENTS_TOP_PADDING}px 16px 16px` }}>
                 <style>{`
                     .vc-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
                     @media (max-width: 900px) { .vc-grid { grid-template-columns: 1fr; } }
@@ -2153,21 +1758,17 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             return false;
         }
 
-        console.log('Applying preview content:', previewContent);
-        console.log('To component:', selectedComponent);
-        console.log('With intent selected:', intentSelected);
-
-        // Find the component text in the current editor value
-        const position = findTextInEditor(selectedComponent.content, value);
-        if (!position) {
-            message.error('Could not locate component in editor');
+        // The editor with the unit's text replaced, wherever the unit is (also over several paragraphs); when it is not there nothing
+        // is changed, not the editor and not what is kept of the unit
+        const replaced = replaceUnit(value, selectedComponent.content, previewContent, selectedComponentId, { highlight: true });
+        if (!replaced) {
+            message.error('Could not locate the text of this part in the editor, so it was not changed.');
             return false;
         }
 
-        // Simply replace the component content using a more direct approach
         const combinedResult = combinedResults.find(result => result.id === selectedComponentId);
         let linkedIntents = combinedResult?.linkedIntents || [];
-        
+
         // Update linkedIntents with new intentSelected values if provided
         if (intentSelected) {
             linkedIntents = linkedIntents.map(intent => 
@@ -2180,26 +1781,8 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                     : intent
             );
         }
-        
-        // Update the editor value directly
-        const newValue = value.map(node => {
-            const nodeText = getNodeText(null, node);
-            if (nodeText.includes(selectedComponent.content)) {
-                // Replace the component content in this node
-                const updatedText = nodeText.replace(selectedComponent.content, previewContent);
-                return {
-                    ...node,
-                    children: [{
-                        text: updatedText,
-                        highlight: true,
-                        componentId: selectedComponentId
-                    }]
-                };
-            }
-            return node;
-        });
-        
-        setValue(newValue);
+
+        setValue(replaced.value);
         setEditorKey(prev => prev + 1);
 
         // Update component states
@@ -3061,10 +2644,12 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         }
         const intentSelected = { dimension: cards.dimension, current_value: item.value, other_values: otherValues };
 
-        // Line breaks inside a unit would throw off the position search; paragraphs stay as they are
-        const newContent = item.content.replace(/\s*\n+\s*/g, ' ').trim();
+        // A unit in one paragraph stays one line; one over several paragraphs (a sign-off and the name below it) keeps its paragraphs
+        const unitRange = locateUnitRange(value.map(node => getNodeText(null, node)), component.content);
+        const coversSeveralParagraphs = Boolean(unitRange) && unitRange.first !== unitRange.last;
+        const newContent = shapeUnitText(item.content, coversSeveralParagraphs);
         const oldNodeText = getUnitNodeText(cards.unitId, value);
-        const replacedText = oldNodeText === null ? newContent : oldNodeText.replace(component.content, newContent);
+        const replacedText = oldNodeText === null || coversSeveralParagraphs ? newContent : oldNodeText.replace(component.content, newContent);
 
         // Slate reports the deselect a moment later with the content it has now. Replacing the unit in the same tick would let that
         // report put the old text back (the caret is in the unit after a click), so the replacement comes after it
@@ -3158,44 +2743,25 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                 rejected[unit.id] = `check: ${problem}`;
                 return;
             }
-            const keepOf = (node) => (Array.isArray(node.children) ? node.children.find(child => child && child.highlight) : null);
+            const replaced = replaceUnit(workingValue, oldContent, newContent, unit.id);
+            if (!replaced) {
+                rejected[unit.id] = 'locate: text not found in the editor';
+                return;
+            }
+            // keep the caret where it was in the text that stays
             if (oneParagraph) {
-                const index = range.first;
-                const span = { start: range.start, end: range.end };
-                if (cursor && cursor.index === index) {
-                    if (span.end <= cursor.offset) {
-                        cursor.offset += newContent.length - (span.end - span.start);
-                    } else if (span.start < cursor.offset) {
-                        cursor.offset = span.start + Math.min(cursor.offset - span.start, newContent.length);
+                if (cursor && cursor.index === range.first) {
+                    if (range.end <= cursor.offset) {
+                        cursor.offset += newContent.length - (range.end - range.start);
+                    } else if (range.start < cursor.offset) {
+                        cursor.offset = range.start + Math.min(cursor.offset - range.start, newContent.length);
                     }
                 }
-                workingValue = workingValue.map((node, i) => {
-                    if (i !== index) return node;
-                    const keep = keepOf(node);
-                    return {
-                        ...node,
-                        children: [{
-                            text: getNodeText(null, node).slice(0, span.start) + newContent + getNodeText(null, node).slice(span.end),
-                            componentId: keep ? keep.componentId : unit.id,
-                            ...(keep ? { highlight: true } : {})
-                        }]
-                    };
-                });
             } else {
-                // The unit covers several paragraphs: they are replaced by the paragraphs of the new text
                 if (cursor && cursor.index >= range.first && cursor.index <= range.last) cursor = null;
-                const firstNode = workingValue[range.first];
-                const keep = keepOf(firstNode);
-                const parts = newContent.split(/\n+/).map(part => part.trim()).filter(Boolean);
-                parts[0] = paragraphTexts[range.first].slice(0, range.start) + parts[0];
-                parts[parts.length - 1] += paragraphTexts[range.last].slice(range.end);
-                const rebuilt = parts.map(text => ({
-                    ...firstNode,
-                    children: [{ text, componentId: keep ? keep.componentId : unit.id, ...(keep ? { highlight: true } : {}) }]
-                }));
-                workingValue = [...workingValue.slice(0, range.first), ...rebuilt, ...workingValue.slice(range.last + 1)];
-                if (cursor && cursor.index > range.last) cursor.index += rebuilt.length - (range.last - range.first + 1);
+                if (cursor && cursor.index > range.last) cursor.index += replaced.paragraphs.last - range.last;
             }
+            workingValue = replaced.value;
             const draftSpan = locateUnitText(draft, oldContent);
             if (draftSpan) draft = draft.slice(0, draftSpan.start) + newContent + draft.slice(draftSpan.end);
             applied.push({ id: unit.id, title: unit.title, oldContent, newContent });
@@ -3303,8 +2869,9 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
     // written until the user confirms: the rewrites are made in parallel and shown as they arrive, and "Apply selected" writes the ticked ones.
     // When all of them still fit, nothing is shown.
     const proposeIntentChange = async ({ sourceUnitId, sourceTitle, sourceOldContent, sourceNewContent, intentSelected, oldValue, chosenValue }) => {
-        const targets = combinedResultsRef.current.filter(unit => unit.id !== sourceUnitId
-            && (unit.linkedIntents || []).some(i => i.dimension === intentSelected.dimension && i.current_value !== intentSelected.current_value));
+        // The units that share the intent and do not have its value yet; none when the change comes from the opening salutation or the
+        // valediction, and never those two (they are changed on their own)
+        const targets = propagationTargets(combinedResultsRef.current, sourceUnitId, intentSelected);
         if (targets.length === 0) return;
         const id = propagationIdRef.current + 1;
         propagationIdRef.current = id;
@@ -3654,7 +3221,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         
         // 为每个component添加dimension标记
         results.forEach(component => {
-            newValue = markUnitInValue(newValue, component.content, component.id);
+            newValue = markUnit(newValue, component.content, component.id);
         });
         
         setValue(newValue);
@@ -3762,11 +3329,11 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                 minWidth: 0,
                 height: 'calc(100vh - 64px)',
                 overflowY: 'auto',
-                padding: '24px',
+                padding: `${PAGE_TOP_PADDING}px 24px 24px`,
                 background: '#fff',
             }}
         >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0, ...({ height: '40px' }) }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: `${TITLE_GAP}px`, flexShrink: 0, height: `${TITLE_ROW_HEIGHT}px` }}>
                 <div style={{ fontSize: '24px', fontWeight: 'bold' }}>Email Draft Editor</div>
                 <div style={{ display: 'flex', gap: '8px' }}>
                 </div>
@@ -3797,6 +3364,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             className="email-editor-card"
                 size="small"
                 style={{
+                    borderRadius: EDITOR_RADIUS,
                     flex: 1,
                     minHeight: 0,
                     boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
@@ -3816,7 +3384,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                     <div style={draftGenerating ? { display: 'none' } : undefined}>
                     <Row style={{ 
                         borderBottom: '1px solid #d9d9d9',
-                        height: '500px',
+                        height: `${EDITOR_ROW_HEIGHT}px`,
                         overflow: 'auto'
                     }}>
                         <Col span={18} style={{ height: '100%' }}>
@@ -3892,7 +3460,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                                                 .unit-leaf.unit-hover:not(.unit-selected) { background-color: #fff8e1; border-radius: 4px; }
                                                 .subject-row p { margin: 0; }
                                                 /* the white card with its border, drawn behind the scroller from the subject line down */
-                                                .card-bg { position: absolute; left: 16px; right: 16px; bottom: 20px; top: calc(16px + var(--card-top, 0px));
+                                                .card-bg { position: absolute; left: 16px; right: 16px; bottom: ${FRAME_BOTTOM}px; top: calc(${FRAME_TOP}px + var(--card-top, 0px));
                                                     border-radius: ${BOX_RADIUS}px; background: #fff; box-sizing: border-box; pointer-events: none; }
                                                 .card-frame[data-card="0"] .card-bg { display: none; }
                                             `}</style>}
@@ -3978,9 +3546,9 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                             >
                                 <div style={{ 
                                     fontWeight: 'bold', 
-                                    marginBottom: '16px',
+                                    marginBottom: '12px',
                                     fontSize: '14px',
-                                    color: '#333',
+                                    color: '#595959',
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',

@@ -13,9 +13,9 @@ MODE=['all']
 DRAFT="Subject: A note\n\nDear Vision,\n\nI love you and I am so sorry for everything.\n\nI hope we can talk soon.\n\nWith all my love,\n\nWanda"
 COMPS=[{"id":"subject_line","title":"Subject Line","content":"Subject: A note"},{"id":"opening","title":"Opening","content":"Dear Vision,"},
  {"id":"apology","title":"Apology","content":"I love you and I am so sorry for everything."},{"id":"call_to_action","title":"Call to Action","content":"I hope we can talk soon."},
- {"id":"valediction","title":"Valediction","content":"With all my love,\n\nWanda"}]
+ {"id":"closing","title":"Closing","content":"With all my love,\n\nWanda"}]
 INTENTS=[{"dimension":"Level of Warmth","current_value":"Deeply affectionate","other_values":["Warm and caring","Polite and neutral","Brief and calm"]}]
-LINKS=[{"intent_dimension":"Level of Warmth","component_id":c} for c in ("apology","call_to_action","valediction")]
+LINKS=[{"intent_dimension":"Level of Warmth","component_id":c} for c in ("apology","call_to_action","closing")]
 def rewriter(route):
     d=json.loads(route.request.post_data); i=d['intentSelected']; vals=[i['current_value']]+i['other_values']
     cur=d['componentCurrent']
@@ -60,7 +60,7 @@ with sync_playwright() as p:
     pg.wait_for_function("!document.querySelector('.draft-generating-page') && !document.querySelector('button.ant-btn-loading')", timeout=120000); pg.wait_for_timeout(1500)
     try: pg.get_by_text('Got it').click(timeout=5000)
     except Exception: pass
-    OTHERS=['call_to_action','valediction']
+    OTHERS=['call_to_action','closing']
     snap=lambda: {u:unit_text(pg,u) for u in OTHERS}
     # 1. some parts no longer fit: the window opens, nothing is written until the user answers
     MODE[0]='all'; before=snap(); use_card(pg); pg.locator(MODAL).wait_for(timeout=30000)
@@ -74,7 +74,7 @@ with sync_playwright() as p:
     check('1e Apply selected shows how many are ticked', pg.locator(MODAL).get_by_role('button', name='Apply selected (1)').count()==1)
     pg.locator(MODAL).get_by_role('button', name='Apply selected').click(); pg.wait_for_timeout(2000)
     after=snap()
-    check('1f the window closes and only the ticked unit changed', pg.locator(MODAL).count()==0 and after['call_to_action']==before['call_to_action'] and after['valediction']!=before['valediction'], str(after))
+    check('1f the window closes and only the ticked unit changed', pg.locator(MODAL).count()==0 and after['call_to_action']==before['call_to_action'] and after['closing']!=before['closing'], str(after))
     pg.mouse.click(5,5); pg.keyboard.press('Meta+z'); pg.wait_for_timeout(1500)
     check('1g Cmd+Z takes it back', snap()==before)
     # 2. Skip changes nothing

@@ -19,6 +19,7 @@ with sync_playwright() as p:
         cur=json.load(urllib.request.urlopen(t)); break
     DIMS.extend(i['dimension'].strip().lower() for i in cur)
     units=list(dict.fromkeys([pg.locator(U).nth(i).get_attribute('data-unit') for i in range(pg.locator(U).count()) if pg.locator(U).nth(i).get_attribute('data-unit')]))
+    units=[u for u in units if not re.search('salutation|valediction', u, re.I)]  # these two are changed on their own: nothing is carried from or to them
     per={}
     for u in units:
         if click_unit(pg,u): per[u]=pills(pg)

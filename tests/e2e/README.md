@@ -25,6 +25,8 @@ python3 journey.py "?pid=zz_e2e" after   # one script (the full user journey, 44
 | `placeholders_delete.py`, `placeholders_table.py`, `placeholders_examples.py`, `placeholders_tab.py`, `placeholders_ampersand.py` | delete icon, layout, "e.g." brackets, Tab between boxes, `A & B` brackets |
 | `propagation_window.py` | the window that asks before a change reaches other parts, with the real model: the window opens exactly when the check says a part does not fit |
 | `propagation_window_stubbed.py`, `propagation_multi_paragraph.py` | the same window with stubbed answers, so every branch is deterministic: apply, skip, undo, some parts fit, all fit, the check fails; and a sign-off over two paragraphs |
+| `valediction_unit.py` | the opening salutation and the valediction (the latter over several paragraphs): highlighted when clicked in the list, changed in the editor by a card, never carried to other parts and never listed in their window |
+| `editor_layout.py` | the body of the email has more room (the subject row is lower, the body card starts higher) while the intents and the end of the card stay where they were; the two titles stay centred |
 | `window_centered.py` | that window stays centred |
 
 **With the preference model down.** Start the backend with an unreachable model service, e.g.

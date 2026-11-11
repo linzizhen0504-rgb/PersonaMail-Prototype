@@ -8,6 +8,7 @@ import communicationIcon from '../commnuication.png'; // 引入图片
 import demongraphyIcon from '../demography.png'; // 引入图片
 import ristMitigationIcon from '../ristMitigation.png'; // 引入图片
 import { api } from '../api';
+import { SIDEBAR_TOP_PADDING } from '../layout';
 
 export const useFactorSelection = ({ userTask, userName: globalUsername, taskId: globalTaskId, onDraftGenerated, onLoadingChange, getExtraRequest, logEvent }) => {
 
@@ -560,8 +561,8 @@ const FactorPanel = ({ selection, userTask, canGenerate, onGenerate, topSlot = n
 
     return (
         <div className="factor-panel factor-panel-sidebar" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            {/* The "Email Draft Editor" title row is 40px high under 24px of padding, so its centre is 44px below the top; the first row here is 20px high, so 34px of padding puts the "Information to fill" title on the same centre line */}
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '34px 16px 16px' }}>
+            {/* The top padding is worked out in src/layout.js so that the "Information to fill" title is on the same centre line as the "Email Draft Editor" title */}
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: `${SIDEBAR_TOP_PADDING}px 16px 16px` }}>
                 {topSlot}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>

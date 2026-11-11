@@ -25,7 +25,7 @@ tested alone and replaced without touching the others.
 | Part | Folder | What it does | Knows about |
 |---|---|---|---|
 | Pages | `src/pages/`, `src/App.js` | Screens, the editor (Slate), clicks and typing | `src/api`, `src/domain` |
-| Page logic | `src/domain/` | Pure functions: finding a unit in the email, comparing texts, checking a rewrite, placeholders | nothing (no React, no network) |
+| Page logic | `src/domain/` | Pure functions: finding, marking, highlighting and replacing a unit in the email (also over several paragraphs), which units a change reaches, comparing texts, checking a rewrite, placeholders | nothing (no React, no network) |
 | Page → backend | `src/api/` | The only place that names the backend and calls it | the http contract |
 | Contract | `contracts/schemas/` | One JSON Schema file per endpoint: request and answer (and the shape of an error) | – |
 | Backend start-up | `server/index.js`, `server/config.js`, `server/app.js` | Reads the environment, chooses the implementation of every port, starts the server | everything (it is the only place that does) |
