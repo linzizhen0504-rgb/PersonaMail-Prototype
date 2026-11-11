@@ -147,12 +147,30 @@ describe('who may call', () => {
 describe('the record of requests', () => {
     it('keeps every request with its answer, without the headers that hold secrets', async () => {
         apiEntries.length = 0;
-        await call('GET', '/api-logs/dates', undefined, { Authorization: 'Bearer SECRET', Cookie: 'session=SECRET' });
-        const logged = apiEntries.find(item => item.entry.request.url === '/api-logs/dates');
+        await call('POST', '/log-event', { pid: 'P01', event: 'pick' }, { Authorization: 'Bearer SECRET', Cookie: 'session=SECRET' });
+        const logged = apiEntries.find(item => item.entry.request.url === '/log-event');
         assert.equal(logged.type, 'api');
         assert.equal(logged.entry.response.statusCode, 200);
-        assert.equal(logged.entry.endpoint, '_api-logs_dates');
+        assert.equal(logged.entry.endpoint, '_log-event');
         assert.ok(!JSON.stringify(logged.entry).includes('SECRET'));
+    });
+
+    it('does not record the reading of the record itself (it would grow with every reading)', async () => {
+        apiEntries.length = 0;
+        await call('GET', '/api-logs/dates');
+        await call('GET', '/api-logs?date=2026-11-10');
+        await call('DELETE', '/api-logs?date=1999-01-01&type=api');
+        assert.equal(apiEntries.length, 0);
+    });
+
+    it('keeps only the start of an answer or a request that is very long', async () => {
+        apiEntries.length = 0;
+        const long = 'x'.repeat(100000);
+        await call('POST', '/log-event', { pid: 'P01', event: 'big', note: long });
+        const logged = apiEntries.find(item => item.entry.request.url === '/log-event');
+        assert.ok(JSON.stringify(logged.entry).length < 20000, String(JSON.stringify(logged.entry).length));
+        assert.equal(logged.entry.request.body.truncated, true);
+        assert.ok(logged.entry.request.body.size > 100000);
     });
 
     it('log-event passes the event on to the experiment log', async () => {
