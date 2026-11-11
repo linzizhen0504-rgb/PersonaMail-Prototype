@@ -1,0 +1,30 @@
+{
+  "name": "log-event",
+  "method": "POST",
+  "path": "/log-event",
+  "description": "Record one event of the experiment",
+  "request": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string"
+      },
+      "event": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "ok"
+    ]
+  }
+}

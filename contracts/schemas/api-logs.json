@@ -1,0 +1,21 @@
+{
+  "name": "api-logs",
+  "method": "GET",
+  "path": "/api-logs",
+  "description": "The record of requests of one day",
+  "response": {
+    "type": "object",
+    "properties": {
+      "availableDates": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "availableDates"
+    ]
+  }
+}

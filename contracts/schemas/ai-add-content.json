@@ -1,0 +1,52 @@
+{
+  "name": "ai-add-content",
+  "method": "POST",
+  "path": "/ai-add-content",
+  "description": "Add content to the draft as the writer asked: the whole revised draft",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userTask": {
+        "type": "string",
+        "minLength": 1
+      },
+      "userName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "taskId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "currentDraft": {
+        "type": "string",
+        "minLength": 1
+      },
+      "userPrompt": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userTask",
+      "userName",
+      "taskId",
+      "currentDraft",
+      "userPrompt"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "revisedDraft": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "revisedDraft"
+    ]
+  }
+}

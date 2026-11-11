@@ -1,0 +1,9 @@
+{
+  "name": "read-session-file",
+  "method": "GET",
+  "path": "/sessiondata/:taskId/*",
+  "description": "Read a file of a task (its draft, its intents, its meta data)",
+  "response": {
+    "description": "the content of the file: text for .md, json for .json"
+  }
+}

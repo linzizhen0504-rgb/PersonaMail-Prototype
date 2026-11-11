@@ -2,20 +2,20 @@ const express = require('express');
 const { route } = require('../middleware/errors');
 
 // Sessions, their draft and their files
-function sessionRoutes({ session }) {
+function sessionRoutes({ session, check }) {
     const router = express.Router();
 
-    router.post('/create-session', route(async (req, res) => {
+    router.post('/create-session', check('create-session'), route(async (req, res) => {
         const { taskId } = await session.createSession(req.body);
         res.status(200).json({ message: 'Session 数据已创建', taskId });
     }));
 
-    router.post('/save-factor-choices', route(async (req, res) => {
+    router.post('/save-factor-choices', check('save-factor-choices'), route(async (req, res) => {
         await session.saveFactorChoices(req.body);
         res.status(200).json({ message: 'Factor choices saved successfully' });
     }));
 
-    router.post('/update-task-meta', route(async (req, res) => {
+    router.post('/update-task-meta', check('update-task-meta'), route(async (req, res) => {
         await session.updateTaskMeta(req.body);
         res.status(200).json({ message: 'Task meta updated successfully' });
     }));
@@ -28,7 +28,7 @@ function sessionRoutes({ session }) {
         res.send(content);
     }));
 
-    router.post('/sessiondata/:taskId/drafts/latest.md', route(async (req, res) => {
+    router.post('/sessiondata/:taskId/drafts/latest.md', check('save-draft'), route(async (req, res) => {
         await session.saveDraft({ taskId: req.params.taskId, content: (req.body || {}).content });
         res.status(200).json({ message: 'Content saved successfully.' });
     }));

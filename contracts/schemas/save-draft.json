@@ -1,0 +1,31 @@
+{
+  "name": "save-draft",
+  "method": "POST",
+  "path": "/sessiondata/:taskId/drafts/latest.md",
+  "description": "Replace the draft of a task",
+  "request": {
+    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "content"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "message"
+    ]
+  }
+}

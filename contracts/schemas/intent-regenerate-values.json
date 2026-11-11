@@ -1,0 +1,65 @@
+{
+  "name": "intent-regenerate-values",
+  "method": "POST",
+  "path": "/intent-regenerate-values",
+  "description": "Three new values for an intent after the writer rejected the ones shown",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userName": {
+        "type": "string"
+      },
+      "taskId": {
+        "type": "string"
+      },
+      "userTask": {
+        "type": "string",
+        "minLength": 1
+      },
+      "draftLatest": {
+        "type": "string",
+        "minLength": 1
+      },
+      "intentDimension": {
+        "type": "string",
+        "minLength": 1
+      },
+      "currentValue": {
+        "type": "string",
+        "minLength": 1
+      },
+      "rejectedValues": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userTask",
+      "draftLatest",
+      "intentDimension",
+      "currentValue",
+      "rejectedValues"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "other_values": {
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 3,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "other_values"
+    ]
+  }
+}

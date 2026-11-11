@@ -1,0 +1,21 @@
+{
+  "name": "api-logs-dates",
+  "method": "GET",
+  "path": "/api-logs/dates",
+  "description": "The days that have a record of requests",
+  "response": {
+    "type": "object",
+    "properties": {
+      "availableDates": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "availableDates"
+    ]
+  }
+}

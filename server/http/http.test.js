@@ -132,6 +132,51 @@ describe('answers to a call that cannot be served', () => {
     });
 });
 
+describe('requests are checked against the contract before anything is done', () => {
+    it('a field of the wrong type is a 400 that names the field', async () => {
+        const response = await call('POST', '/select-factors', { userTask: 5 });
+        assert.equal(response.status, 400);
+        assert.equal(response.json.code, 'VALIDATION');
+        assert.match(response.json.error, /userTask/);
+    });
+
+    it('a missing field is named in the message', async () => {
+        const response = await call('POST', '/create-session', { userName: 'mia' });
+        assert.equal(response.status, 400);
+        assert.match(response.json.error, /userInput is required/);
+    });
+
+    it('every problem is listed, not only the first', async () => {
+        const response = await call('POST', '/update-task-meta', {});
+        assert.match(response.json.error, /userName is required/);
+        assert.match(response.json.error, /taskId is required/);
+        assert.match(response.json.error, /originalTask is required/);
+    });
+
+    it('the list of targets of a consistency check may not be empty', async () => {
+        const response = await call('POST', '/intent-consistency-check', { intentSelected: { dimension: 'Tone', current_value: 'Cool' }, source: { oldContent: 'a', newContent: 'b' }, targets: [] });
+        assert.equal(response.status, 400);
+        assert.match(response.json.error, /targets/);
+    });
+
+    it('nothing is done for a bad request (the model is not asked)', async () => {
+        llm.queue('should stay queued');
+        const queuedBefore = llm.prompts.length;
+        await call('POST', '/generate-first-draft', { userTask: 'x' });
+        assert.equal(llm.prompts.length, queuedBefore);
+    });
+
+    it('an unknown extra field does not make a request bad', async () => {
+        const response = await call('POST', '/create-session', { userName: 'mia', userInput: 'x', somethingNew: 1 });
+        assert.equal(response.status, 200);
+    });
+
+    it('a body that is not json is a 400', async () => {
+        const response = await fetch(`${base}/create-session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{not json' });
+        assert.equal(response.status, 400);
+    });
+});
+
 describe('who may call', () => {
     it('lets the page of the app call (the origin is allowed)', async () => {
         const response = await call('GET', '/api-logs/dates', undefined, { Origin: 'http://localhost:3000' });

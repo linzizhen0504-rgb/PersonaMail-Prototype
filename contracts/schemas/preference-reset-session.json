@@ -1,0 +1,29 @@
+{
+  "name": "preference-reset-session",
+  "method": "POST",
+  "path": "/preference/reset-session",
+  "description": "Forget what the preference model kept for one draft of a task",
+  "request": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string",
+        "minLength": 1
+      },
+      "session_id": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "pid",
+      "session_id"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": true
+  }
+}

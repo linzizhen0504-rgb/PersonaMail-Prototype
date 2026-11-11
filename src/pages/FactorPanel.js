@@ -7,7 +7,7 @@ import relationshipIcon from '../relationship.png'; // 引入图片
 import communicationIcon from '../commnuication.png'; // 引入图片
 import demongraphyIcon from '../demography.png'; // 引入图片
 import ristMitigationIcon from '../ristMitigation.png'; // 引入图片
-import axios from 'axios';
+import { api } from '../api';
 
 export const useFactorSelection = ({ userTask, userName: globalUsername, taskId: globalTaskId, onDraftGenerated, onLoadingChange, getExtraRequest, logEvent }) => {
 
@@ -158,7 +158,7 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
         const factorChoices = buildFactorChoices(chosenFactors, chosenValues);
 
         // Save factor choices
-        await axios.post(`http://localhost:3001/save-factor-choices`, {
+        await api.session.saveFactorChoices({
           userName: globalUsername,
           factorChoices,
           taskId: globalTaskId
@@ -166,18 +166,16 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
 
         // Details the writer already typed in (the "Information to fill" table) go to the writer with the request
         const extraRequest = getExtraRequest ? getExtraRequest() : '';
-        const response = await axios.post('http://localhost:3001/generate-first-draft', {
+        const { draft } = await api.drafts.generateFirst({
           userTask: extraRequest ? `${task}\n\n${extraRequest}` : task,
           factorChoices
         });
 
         // Save the draft content to latest.md
-        await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-          content: response.data.draft
-        });
+        await api.drafts.save(globalTaskId, draft);
 
         // The caller may still be busy with the new draft (the components are made from it): the loading state lasts until it is done
-        await onDraftGenerated(response.data.draft);
+        await onDraftGenerated(draft);
       } catch (error) {
         console.error('Error generating draft:', error);
         message.error('Failed to generate draft. Please try again.');
@@ -199,9 +197,9 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
         let chosenFactors = {};
         let chosenValues = {};
         try {
-            const response = await axios.post('http://localhost:3001/select-factors', { userTask: task });
-            chosenFactors = response.data.selectedFactors || {};
-            chosenValues = response.data.selectedValues || {};
+            const selection = await api.drafts.selectFactors({ userTask: task });
+            chosenFactors = selection.selectedFactors || {};
+            chosenValues = selection.selectedValues || {};
             if (logEvent) logEvent({ event: 'factors_auto_selected', factors: chosenValues, count: Object.keys(chosenFactors).length, duration_ms: Date.now() - startedAt });
         } catch (error) {
             console.error('Error choosing the factors:', error);
@@ -232,9 +230,9 @@ export const useFactorSelection = ({ userTask, userName: globalUsername, taskId:
 
     useEffect(() => {
         // Fetch the factor list JSON dynamically
-        axios.get('/data/PredefinedData/factor_list.json')
-            .then(response => {
-                const groupedData = response.data.reduce((acc, item) => {
+        api.static.loadFactorList()
+            .then(factors => {
+                const groupedData = factors.reduce((acc, item) => {
                     if (!acc[item.Category]) {
                         acc[item.Category] = [];
                     }

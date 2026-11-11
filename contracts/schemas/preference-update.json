@@ -1,0 +1,63 @@
+{
+  "name": "preference-update",
+  "method": "POST",
+  "path": "/preference/update",
+  "description": "Tell the preference model how a display of versions ended",
+  "request": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string",
+        "minLength": 1
+      },
+      "context": {
+        "type": "string",
+        "minLength": 1
+      },
+      "intent_dimension": {
+        "type": "string",
+        "minLength": 1
+      },
+      "event": {
+        "type": "string",
+        "minLength": 1
+      },
+      "chosen_value": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "shown_values": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "current_text": {
+        "type": "string"
+      },
+      "shown_texts": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "pid",
+      "context",
+      "intent_dimension",
+      "event"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": true
+  }
+}

@@ -8,7 +8,7 @@ const route = (handler) => (req, res, next) => Promise.resolve(handler(req, res,
 const errorHandler = (error, req, res, next) => {
     const status = error.status && error.status < 500 ? error.status : httpStatusFor(error);
     if (status >= 500) console.error(`${req.method} ${req.url}:`, error);
-    res.status(status).json({ error: error.message || 'Error', code: error.code || 'INTERNAL' });
+    res.status(status).json({ error: error.message || 'Error', code: error.code || (status === 400 ? 'VALIDATION' : 'INTERNAL') });
 };
 
 module.exports = { route, errorHandler };

@@ -1,0 +1,36 @@
+{
+  "name": "generate-first-draft",
+  "method": "POST",
+  "path": "/generate-first-draft",
+  "description": "Write the first draft of an email",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userTask": {
+        "type": "string",
+        "minLength": 1
+      },
+      "factorChoices": {
+        "type": "object"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userTask",
+      "factorChoices"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "draft": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "draft"
+    ]
+  }
+}

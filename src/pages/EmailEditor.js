@@ -3,7 +3,7 @@ import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
 import { withHistory, HistoryEditor } from 'slate-history';
 import { Card, message, Button, Row, Col, Tag, Modal, Input, Spin, Tour, Checkbox } from 'antd';
-import axios from 'axios';
+import { api } from '../api';
 import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
 import FactorPanel, { useFactorSelection } from './FactorPanel';
@@ -42,11 +42,6 @@ const getExperimentParams = () => {
 };
 const EXPERIMENT = getExperimentParams();
 
-// The preference model is reached through the backend (/preference/...): the backend has the short timeout for the model service and
-// answers with a random order when it is down
-const PREFERENCE_API = 'http://localhost:3001/preference';
-const PREFERENCE_TIMEOUT_MS = 5000;
-const callModel = (path, payload) => axios.post(`${PREFERENCE_API}${path}`, payload, { timeout: PREFERENCE_TIMEOUT_MS });
 
 // Context of the current task: the participant's choice for the power/status factor, or "unknown"
 const POWER_FACTOR_ID = 'power_difference';
@@ -71,7 +66,7 @@ const logEvent = (fields) => {
         duration_ms: null,
         ...fields
     };
-    axios.post('http://localhost:3001/log-event', record).catch(error => {
+    api.logging.logEvent(record).catch(error => {
         console.warn('Failed to log event:', error);
     });
 };
@@ -412,9 +407,9 @@ const EmailEditor = () => {
             return;
         }
         setTaskChecked(false);
-        axios.get(`http://localhost:3001/sessiondata/${globalTaskId}/meta/task.json`)
-            .then(response => {
-                if (!cancelled) setRecoveredUserTask((response.data?.original_task || '').trim());
+        api.session.readMeta(globalTaskId)
+            .then(meta => {
+                if (!cancelled) setRecoveredUserTask(((meta && meta.original_task) || '').trim());
             })
             .catch(error => console.error('Failed to recover user task:', error))
             .finally(() => {
@@ -430,7 +425,7 @@ const EmailEditor = () => {
         if (!text || !globalTaskId) return;
         try {
             // Update meta/task.json with original_task
-            await axios.post(`http://localhost:3001/update-task-meta`, {
+            await api.session.updateTaskMeta({
                 userName: globalUsername,
                 taskId: globalTaskId,
                 originalTask: text
@@ -616,7 +611,7 @@ const EmailEditor = () => {
         if (!globalTaskId) return;
         const previous = styleSessionId();
         draftVersionRef.current += 1;
-        callModel('/reset-session', { pid: EXPERIMENT.pid, session_id: previous }).catch((resetError) => {
+        api.preference.resetSession({ pid: EXPERIMENT.pid, session_id: previous }).catch((resetError) => {
             console.warn('Preference model unavailable for /reset-session:', resetError.message);
             logEvent({ event: 'model_unavailable', endpoint: 'reset-session' });
         });
@@ -648,7 +643,7 @@ const EmailEditor = () => {
         applyDraftText(text, fills.size > 0 ? { template: draft, fills, known } : null);
         if (text !== draft) {
             // The server saved the draft with the brackets; the draft file follows the editor
-            await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: text })
+            await api.drafts.save(globalTaskId, text)
                 .catch(error => console.error('Error saving draft to sessionData:', error));
         }
         if (fills.size > 0) {
@@ -797,7 +792,7 @@ const EmailEditor = () => {
         }
         const draft = children.map(node => getNodeText(null, node)).filter(text => text.trim()).join('\n\n');
         setOriginalText(draft);
-        axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: draft })
+        api.drafts.save(globalTaskId, draft)
             .catch(error => console.error('Error saving draft to sessionData:', error));
     };
     // Write the value typed for one field into the email: the brackets of the field become the value, text that was filled in
@@ -988,14 +983,14 @@ const EmailEditor = () => {
         if (!userPrompt || !currentDraft.trim() || aiLoading) return;
         try {
             setAiLoading(true);
-            const response = await axios.post('http://localhost:3001/ai-add-content', {
+            const response = await api.drafts.addContent({
                 userTask: userTask,
                 userName: globalUsername,
                 taskId: globalTaskId,
                 currentDraft,
                 userPrompt
             });
-            setAiPreview({ visible: true, content: response.data.revisedDraft });
+            setAiPreview({ visible: true, content: response.revisedDraft });
         } catch (error) {
             console.error('Failed to add content with AI:', error);
             message.error('Failed to generate the revised draft. Please try again.');
@@ -1010,9 +1005,7 @@ const EmailEditor = () => {
         setAiPreview({ visible: false, content: '' });
         setAiPrompt('');
         try {
-            await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                content: newContent
-            });
+            await api.drafts.save(globalTaskId, newContent);
             message.success('Draft updated');
         } catch (error) {
             console.error('Failed to save updated draft:', error);
@@ -1029,8 +1022,7 @@ const EmailEditor = () => {
         
         const fetchDraft = async () => {
             try {
-                const response = await axios.get(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`);
-                const draftContent = typeof response.data === 'string' ? response.data : '';
+                const draftContent = await api.drafts.read(globalTaskId);
                 setOriginalText(draftContent);
                 setHasDraft(Boolean(draftContent.trim()));
                 setComponents([]);
@@ -1161,20 +1153,20 @@ const EmailEditor = () => {
                 // or the units would not be found in the editor and nothing would be highlighted
                 const current = valueRef.current.map(node => getNodeText(null, node)).filter(text => text.trim()).join('\n\n');
                 if (current.trim()) {
-                    await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: current })
+                    await api.drafts.save(globalTaskId, current)
                         .catch(error => console.error('Error saving draft to sessionData:', error));
                 }
             }
-            const response = await axios.post('http://localhost:3001/component-extractor', {
+            const response = await api.components.extract({
                 taskId: globalTaskId,
                 userName: globalUsername,
             });
 
             let extractedComponents = [];
             try {
-                extractedComponents = JSON.parse(response.data.components);
+                extractedComponents = JSON.parse(response.components);
             } catch (e) {
-                const jsonMatch = response.data.components.match(/\[[\s\S]*\]/);
+                const jsonMatch = response.components.match(/\[[\s\S]*\]/);
                 if (jsonMatch) {
                     extractedComponents = JSON.parse(jsonMatch[0]);
                 } else {
@@ -1194,23 +1186,23 @@ const EmailEditor = () => {
 
             // Call the new intent-analyzer-new endpoint
             try {
-                const intentResponse = await axios.post('http://localhost:3001/intent-analyzer-new', {
+                const intentResponse = await api.intents.analyze({
                     userTask: userTaskRef.current,
                     userName: globalUsername,
                     taskId: globalTaskId,
                 });
-                console.log('Intent Analyzer New Response:', intentResponse.data);
+                console.log('Intent Analyzer New Response:', intentResponse);
 
                 // Call the new component-intent-link endpoint
-                const linkResponse = await axios.post('http://localhost:3001/component-intent-link', {
+                const linkResponse = await api.components.link({
                     userName: globalUsername,
                     taskId: globalTaskId,
                     componentList: extractedComponents,
                 });
 
-                linkResults = typeof linkResponse.data.links === 'string' 
-                    ? JSON.parse(linkResponse.data.links) 
-                    : linkResponse.data.links;
+                linkResults = typeof linkResponse.links === 'string' 
+                    ? JSON.parse(linkResponse.links) 
+                    : linkResponse.links;
                 console.log('Component-Intent Link Results:', linkResults);
                 if (!(await handleCombinedResult())) throw new Error('Could not combine the components and the intents');
             } catch (intentError) {
@@ -2388,9 +2380,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         // Save updated content to sessionData
         const saveDraft = async () => {
             try {
-                await axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, {
-                    content: updatedText,
-                });
+                await api.drafts.save(globalTaskId, updatedText);
                 console.log('Draft saved to sessionData');
             } catch (error) {
                 console.error('Error saving draft to sessionData:', error);
@@ -2640,7 +2630,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         setSelectedComponentId(snapshot.selectedComponentId);
         cardsRef.current = null;
         setCardsState(null);
-        axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: draft })
+        api.drafts.save(globalTaskId, draft)
             .catch(error => console.error('Error saving draft to sessionData:', error));
         logEvent({ event: kind === 'redo' ? 'selection_rewrite_redone' : 'selection_rewrite_undone' });
     };
@@ -2680,7 +2670,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         setRewriteBox(prev => prev && { ...prev, status: 'loading', errorMessage: '', requestedAt: Date.now() });
         logEvent({ unit_id: box.unitId, unit_title: box.unitTitle, event: 'selection_rewrite_requested', selected_text: box.selectedText, prompt: box.prompt, trigger: box.trigger || 'selection' });
         try {
-            const response = await axios.post('http://localhost:3001/ai-generate-rewrite', {
+            const response = await api.drafts.rewriteSelection({
                 userTask,
                 userName: globalUsername,
                 taskId: globalTaskId,
@@ -2689,7 +2679,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             });
             if (requestId !== rewriteRequestRef.current) return;
             // Line breaks inside a unit would throw off the position search; across paragraphs they stay as paragraph breaks
-            const answer = String(response.data.rewrittenContent || '').replace(/\r/g, '');
+            const answer = String(response.rewrittenContent || '').replace(/\r/g, '');
             const rewritten = box.multi
                 ? answer.split(/\s*\n+\s*/).map(part => part.trim()).filter(Boolean).join('\n\n')
                 : answer.replace(/\s*\n+\s*/g, ' ').trim();
@@ -2718,7 +2708,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             new_text: newText, duration_ms: box.requestedAt ? Date.now() - box.requestedAt : null, mode: box.mode, trigger: box.trigger || 'selection', ...extra
         });
         const draftOf = (blocks) => blocks.filter(text => text.trim()).join('\n\n');
-        const saveDraft = (draft) => axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: draft })
+        const saveDraft = (draft) => api.drafts.save(globalTaskId, draft)
             .catch(error => console.error('Error saving draft to sessionData:', error));
 
         if (box.mode === 'unit') {
@@ -2867,7 +2857,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
     }, [rewriteBoxOpen]);
 
     // cards: tell the preference model how a display ended (once per display)
-    const sendModelUpdate = (cards, event, chosenValue) => callModel('/update', {
+    const sendModelUpdate = (cards, event, chosenValue) => api.preference.update({
         pid: EXPERIMENT.pid,
         context: cards.context,
         intent_dimension: cards.dimension,
@@ -2970,7 +2960,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             .map(other => ({ dimension: other.dimension, current_value: other.current_value }));
         let filtered = 0;
         for (let attempt = 0; attempt < 2; attempt++) {
-            const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
+            const response = await api.intents.rewrite({
                 userName: globalUsername,
                 taskId: globalTaskId,
                 userTask,
@@ -2983,7 +2973,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                 },
                 intentOthers
             });
-            const variations = response.data && response.data.component_variations;
+            const variations = response && response.component_variations;
             if (!Array.isArray(variations)) throw new Error('No versions returned');
             const seenValues = new Set();
             const versions = variations.filter(v => {
@@ -3020,7 +3010,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         let rankScores = null;
         let styleScores = null;
         try {
-            const ranked = await callModel('/rank', {
+            const ranked = await api.preference.rank({
                 pid: EXPERIMENT.pid,
                 context,
                 intent_dimension: intent.dimension,
@@ -3030,10 +3020,10 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                 current_text: unit.content
             });
             const byValue = new Map(candidates.map(v => [v.intent_value, v]));
-            chosenVersions = ((ranked.data && ranked.data.values) || []).map(name => byValue.get(name)).filter(Boolean);
+            chosenVersions = ((ranked && ranked.values) || []).map(name => byValue.get(name)).filter(Boolean);
             if (candidates.length > 0 && chosenVersions.length === 0) throw new Error('empty ranking');
-            ordering = ranked.data.ordering;
-            if (ranked.data.available === false) {
+            ordering = ranked.ordering;
+            if (ranked.available === false) {
                 // the backend could not reach the preference model and chose a random order itself
                 logEvent({
                     unit_id: unit.id,
@@ -3043,10 +3033,10 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                     endpoint: 'rank'
                 });
             }
-            mmrUsed = !!ranked.data.mmr_used;
-            styleStrength = ranked.data.style_strength;
-            rankScores = ranked.data.scores || null;
-            styleScores = ranked.data.style_scores || null;
+            mmrUsed = !!ranked.mmr_used;
+            styleStrength = ranked.style_strength;
+            rankScores = ranked.scores || null;
+            styleScores = ranked.style_scores || null;
         } catch (rankError) {
             console.warn('Preference model unavailable for /rank:', rankError.message);
             logEvent({
@@ -3401,7 +3391,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             };
         }));
         setOriginalText(draft);
-        axios.post(`http://localhost:3001/sessiondata/${globalTaskId}/drafts/latest.md`, { content: draft })
+        api.drafts.save(globalTaskId, draft)
             .catch(error => console.error('Error saving draft to sessionData:', error));
         // Keep the edit watch of the used unit consistent when its paragraph also held one of these units
         const watch = editWatchRef.current;
@@ -3422,7 +3412,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             .map(i => ({ dimension: i.dimension, current_value: i.current_value }));
         let lastProblem = 'No version returned';
         for (let attempt = 0; attempt < 2; attempt++) {
-            const response = await axios.post('http://localhost:3001/intent-change-rewriter', {
+            const response = await api.intents.rewrite({
                 userName: globalUsername,
                 taskId: globalTaskId,
                 userTask: userTaskRef.current,
@@ -3435,7 +3425,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                 },
                 intentOthers
             });
-            const variation = ((response.data && response.data.component_variations) || [])
+            const variation = ((response && response.component_variations) || [])
                 .find(v => v && v.intent_value === intentSelected.current_value);
             if (!variation || typeof variation.content !== 'string' || !variation.content.trim()) continue;
             const paragraphs = valueRef.current.map(node => getNodeText(null, node));
@@ -3479,7 +3469,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         let verdicts = {};
         let checkFailed = false;
         try {
-            const response = await axios.post('http://localhost:3001/intent-consistency-check', {
+            const response = await api.intents.checkConsistency({
                 userTask: userTaskRef.current,
                 draftLatest: draftBase,
                 intentSelected: { dimension: intentSelected.dimension, current_value: intentSelected.current_value },
@@ -3487,7 +3477,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                 source: { title: sourceTitle, oldContent: sourceOldContent, newContent: sourceNewContent },
                 targets: targets.map(unit => ({ id: unit.id, title: unit.title, content: unit.content }))
             });
-            ((response.data && response.data.results) || []).forEach(entry => { verdicts[entry.id] = entry; });
+            ((response && response.results) || []).forEach(entry => { verdicts[entry.id] = entry; });
         } catch (error) {
             console.warn('Could not check the other parts:', error.message);
             checkFailed = true;
@@ -3594,13 +3584,13 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
         let exceeds = false;
         if (modelOk) {
             try {
-                const response = await callModel('/reject-check', {
+                const response = await api.preference.rejectCheck({
                     pid: EXPERIMENT.pid,
                     context: cards.context,
                     intent_dimension: cards.dimension
                 });
-                rejectMean = response.data.reject_mean;
-                exceeds = !!response.data.exceeds;
+                rejectMean = response.reject_mean;
+                exceeds = !!response.exceeds;
             } catch (checkError) {
                 console.warn('Preference model unavailable for /reject-check:', checkError.message);
                 logEvent({ ...base, event: 'model_unavailable', endpoint: 'reject-check' });
@@ -3640,7 +3630,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
 
         if (exceeds) {
             try {
-                const response = await axios.post('http://localhost:3001/intent-regenerate-values', {
+                const response = await api.intents.regenerateValues({
                     userName: globalUsername,
                     taskId: globalTaskId,
                     userTask,
@@ -3649,7 +3639,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
                     currentValue: cards.currentValue,
                     rejectedValues: cards.items.map(item => item.value)
                 });
-                const newValues = response.data && response.data.other_values;
+                const newValues = response && response.other_values;
                 if (!Array.isArray(newValues) || newValues.length === 0) throw new Error('No new values returned');
                 // Intents and units are many-to-many: every unit linked to this intent gets the new values
                 setCombinedResults(prev => prev.map(component => ({
@@ -3748,8 +3738,7 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
     const handleCombinedResult = async () => {
         try {
             // Fetch current intents from session data
-            const response = await axios.get(`http://localhost:3001/sessiondata/${globalTaskId}/intents/current.json`);
-            const currentIntents = response.data;
+            const currentIntents = await api.intents.read(globalTaskId);
 
             // Ensure commonComponents is an array
             if (!Array.isArray(commonComponents)) {

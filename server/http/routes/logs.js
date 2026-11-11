@@ -2,10 +2,10 @@ const express = require('express');
 const { route } = require('../middleware/errors');
 
 // The experiment events and the record of requests
-function logRoutes({ experimentLog, apiLog }) {
+function logRoutes({ experimentLog, apiLog, check }) {
     const router = express.Router();
 
-    router.post('/log-event', route(async (req, res) => {
+    router.post('/log-event', check('log-event'), route(async (req, res) => {
         await experimentLog.append(req.body || {});
         res.json({ ok: true });
     }));

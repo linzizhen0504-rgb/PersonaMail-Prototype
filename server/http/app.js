@@ -2,6 +2,8 @@
 const express = require('express');
 const cors = require('cors');
 const { requestLogger } = require('./middleware/requestLogger');
+const { createContractCheck } = require('./middleware/contract');
+const { loadEndpoints } = require('../contracts/http');
 const { errorHandler } = require('./middleware/errors');
 const { sessionRoutes } = require('./routes/session');
 const { emailRoutes } = require('./routes/email');
@@ -14,10 +16,11 @@ function createHttpApp({ email, session, preference, experimentLog, apiLog, cors
     app.use(cors({ origin: (origin, done) => done(null, !origin || corsOrigins.includes(origin) ? origin || true : false) }));
     app.use(express.json({ limit: '1mb' }));
     app.use(requestLogger(apiLog));
-    app.use(logRoutes({ experimentLog, apiLog }));
-    app.use(sessionRoutes({ session }));
-    app.use(emailRoutes({ email }));
-    app.use(preferenceRoutes({ preference }));
+    const check = createContractCheck(loadEndpoints());
+    app.use(logRoutes({ experimentLog, apiLog, check }));
+    app.use(sessionRoutes({ session, check }));
+    app.use(emailRoutes({ email, check }));
+    app.use(preferenceRoutes({ preference, check }));
     app.use(errorHandler);
     return app;
 }

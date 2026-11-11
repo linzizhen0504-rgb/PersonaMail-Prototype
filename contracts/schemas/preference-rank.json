@@ -1,0 +1,87 @@
+{
+  "name": "preference-rank",
+  "method": "POST",
+  "path": "/preference/rank",
+  "description": "The candidates in the order the participant is likely to prefer; random when the preference model is down",
+  "request": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string",
+        "minLength": 1
+      },
+      "context": {
+        "type": "string",
+        "minLength": 1
+      },
+      "intent_dimension": {
+        "type": "string",
+        "minLength": 1
+      },
+      "candidates": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "value"
+          ]
+        }
+      },
+      "k": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "current_text": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "pid",
+      "context",
+      "intent_dimension",
+      "candidates"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "values": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "ordering": {
+        "type": "string"
+      },
+      "mmr_used": {
+        "type": "boolean"
+      },
+      "available": {
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "values",
+      "ordering",
+      "mmr_used",
+      "available"
+    ]
+  }
+}

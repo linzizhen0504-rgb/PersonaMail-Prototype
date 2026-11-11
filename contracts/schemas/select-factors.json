@@ -1,0 +1,38 @@
+{
+  "name": "select-factors",
+  "method": "POST",
+  "path": "/select-factors",
+  "description": "The model picks the factors that matter for a request",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userTask": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userTask"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "selectedFactors": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "boolean"
+        }
+      },
+      "selectedValues": {
+        "type": "object"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "selectedFactors",
+      "selectedValues"
+    ]
+  }
+}

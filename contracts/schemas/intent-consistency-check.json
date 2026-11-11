@@ -1,0 +1,126 @@
+{
+  "name": "intent-consistency-check",
+  "method": "POST",
+  "path": "/intent-consistency-check",
+  "description": "Which of the other units that share an intent no longer agree with its new value",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userTask": {
+        "type": "string"
+      },
+      "draftLatest": {
+        "type": "string"
+      },
+      "intentSelected": {
+        "type": "object",
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "minLength": 1
+          },
+          "current_value": {
+            "type": "string",
+            "minLength": 1
+          },
+          "other_values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "dimension",
+          "current_value"
+        ]
+      },
+      "oldValue": {
+        "type": "string"
+      },
+      "source": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "oldContent": {
+            "type": "string"
+          },
+          "newContent": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "oldContent",
+          "newContent"
+        ]
+      },
+      "targets": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "title": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "id",
+            "content"
+          ]
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "intentSelected",
+      "source",
+      "targets"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "results": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "needs_change": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "id",
+            "needs_change",
+            "reason"
+          ]
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "results"
+    ]
+  }
+}

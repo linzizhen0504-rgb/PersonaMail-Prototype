@@ -1,0 +1,97 @@
+{
+  "name": "intent-change-rewriter",
+  "method": "POST",
+  "path": "/intent-change-rewriter",
+  "description": "The versions of one component under every value of one intent",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "taskId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "userTask": {
+        "type": "string",
+        "minLength": 1
+      },
+      "draftLatest": {
+        "type": "string",
+        "minLength": 1
+      },
+      "componentCurrent": {
+        "type": "string",
+        "minLength": 1
+      },
+      "intentSelected": {
+        "type": "object",
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "minLength": 1
+          },
+          "current_value": {
+            "type": "string",
+            "minLength": 1
+          },
+          "other_values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "dimension",
+          "current_value"
+        ]
+      },
+      "intentOthers": {
+        "type": "array"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userName",
+      "taskId",
+      "userTask",
+      "draftLatest",
+      "componentCurrent",
+      "intentSelected",
+      "intentOthers"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "component_variations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "intent_value": {
+              "type": "string",
+              "minLength": 1
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "intent_value",
+            "content"
+          ]
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "component_variations"
+    ]
+  }
+}

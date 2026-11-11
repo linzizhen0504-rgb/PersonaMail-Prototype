@@ -1,0 +1,40 @@
+{
+  "name": "update-task-meta",
+  "method": "POST",
+  "path": "/update-task-meta",
+  "description": "Store the request of the writer as the original task of the task",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "taskId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "originalTask": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userName",
+      "taskId",
+      "originalTask"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "message"
+    ]
+  }
+}

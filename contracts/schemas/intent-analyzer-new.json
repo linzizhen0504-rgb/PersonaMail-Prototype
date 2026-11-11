@@ -1,0 +1,70 @@
+{
+  "name": "intent-analyzer-new",
+  "method": "POST",
+  "path": "/intent-analyzer-new",
+  "description": "Find the intents of the draft of a task and store them",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userTask": {
+        "type": "string",
+        "minLength": 1
+      },
+      "userName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "taskId": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userTask",
+      "userName",
+      "taskId"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string"
+      },
+      "intents": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "dimension": {
+              "type": "string",
+              "minLength": 1
+            },
+            "current_value": {
+              "type": "string",
+              "minLength": 1
+            },
+            "other_values": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "dimension",
+            "current_value",
+            "other_values"
+          ]
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "message",
+      "intents"
+    ]
+  }
+}

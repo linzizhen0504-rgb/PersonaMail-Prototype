@@ -1,0 +1,40 @@
+{
+  "name": "save-factor-choices",
+  "method": "POST",
+  "path": "/save-factor-choices",
+  "description": "Store the factor choices of a task",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "taskId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "factorChoices": {
+        "type": "object"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userName",
+      "taskId",
+      "factorChoices"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "message"
+    ]
+  }
+}

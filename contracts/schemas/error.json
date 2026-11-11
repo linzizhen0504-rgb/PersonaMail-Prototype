@@ -1,0 +1,22 @@
+{
+  "name": "error",
+  "method": null,
+  "path": null,
+  "description": "The answer to a call that could not be served (any endpoint)",
+  "response": {
+    "type": "object",
+    "properties": {
+      "error": {
+        "type": "string"
+      },
+      "code": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "error",
+      "code"
+    ]
+  }
+}

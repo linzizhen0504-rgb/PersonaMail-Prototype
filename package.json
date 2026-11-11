@@ -11,6 +11,7 @@
     "@testing-library/react": "^16.2.0",
     "@testing-library/user-event": "^13.5.0",
     "agentkeepalive": "^4.6.0",
+    "ajv": "^8.20.0",
     "antd": "^5.24.7",
     "assert": "^2.1.0",
     "axios": "^1.8.1",
@@ -55,6 +56,44 @@
     "extends": [
       "react-app",
       "react-app/jest"
+    ],
+    "overrides": [
+      {
+        "files": [
+          "src/pages/**/*.js",
+          "src/App.js",
+          "src/index.js"
+        ],
+        "excludedFiles": [
+          "**/*.test.js",
+          "src/pages/serverDB.js",
+          "src/pages/serverGM.js"
+        ],
+        "rules": {
+          "no-restricted-imports": [
+            "error",
+            {
+              "paths": [
+                {
+                  "name": "axios",
+                  "message": "Call the backend through src/api, not with axios directly."
+                }
+              ]
+            }
+          ],
+          "no-restricted-syntax": [
+            "error",
+            {
+              "selector": "Literal[value=/localhost:30[0-9][0-9]/]",
+              "message": "The address of the backend is in src/api/client.js only."
+            },
+            {
+              "selector": "TemplateElement[value.raw=/localhost:30[0-9][0-9]/]",
+              "message": "The address of the backend is in src/api/client.js only."
+            }
+          ]
+        }
+      }
     ]
   },
   "browserslist": {
@@ -77,5 +116,10 @@
   "devDependencies": {
     "raw-loader": "^4.0.2",
     "react-app-rewired": "^2.2.1"
+  },
+  "jest": {
+    "moduleNameMapper": {
+      "^axios$": "axios/dist/node/axios.cjs"
+    }
   }
 }

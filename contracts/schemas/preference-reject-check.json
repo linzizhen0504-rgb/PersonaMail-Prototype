@@ -1,0 +1,45 @@
+{
+  "name": "preference-reject-check",
+  "method": "POST",
+  "path": "/preference/reject-check",
+  "description": "Whether the versions shown for an intent were rejected so often that it needs new values",
+  "request": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string",
+        "minLength": 1
+      },
+      "context": {
+        "type": "string",
+        "minLength": 1
+      },
+      "intent_dimension": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "pid",
+      "context",
+      "intent_dimension"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "reject_mean": {
+        "type": "number"
+      },
+      "exceeds": {
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "reject_mean",
+      "exceeds"
+    ]
+  }
+}

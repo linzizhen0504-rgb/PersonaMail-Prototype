@@ -1,0 +1,77 @@
+{
+  "name": "component-intent-link",
+  "method": "POST",
+  "path": "/component-intent-link",
+  "description": "Say which intents shape which components",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "taskId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "componentList": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "title": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "id"
+          ]
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userName",
+      "taskId",
+      "componentList"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "links": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "intent_dimension": {
+              "type": "string",
+              "minLength": 1
+            },
+            "component_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "intent_dimension",
+            "component_id"
+          ]
+        }
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "links"
+    ]
+  }
+}

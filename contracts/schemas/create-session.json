@@ -1,0 +1,41 @@
+{
+  "name": "create-session",
+  "method": "POST",
+  "path": "/create-session",
+  "description": "Start a task for a user: makes its folder and returns its task id",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "userInput": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userName",
+      "userInput"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string"
+      },
+      "taskId": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "message",
+      "taskId"
+    ]
+  }
+}

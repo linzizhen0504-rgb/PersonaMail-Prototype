@@ -1,0 +1,18 @@
+{
+  "name": "api-logs-delete",
+  "method": "DELETE",
+  "path": "/api-logs",
+  "description": "Delete the record of one day or of all days",
+  "response": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "message"
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "component-extractor",
+  "method": "POST",
+  "path": "/component-extractor",
+  "description": "Split the draft of a task into components; answers with the model's json text",
+  "request": {
+    "type": "object",
+    "properties": {
+      "userName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "taskId": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "userName",
+      "taskId"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "components": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "components"
+    ]
+  }
+}

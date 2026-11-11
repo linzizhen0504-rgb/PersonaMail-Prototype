@@ -1,6 +1,6 @@
 // src/App.js
 import React, { useState, createContext, useContext, useEffect, useCallback, useRef } from 'react';
-import axios from 'axios';
+import { api } from './api';
 import { EditOutlined, LogoutOutlined } from '@ant-design/icons';
 import { Layout, theme, Input, Button, Space, Dropdown, message } from 'antd';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom';
@@ -57,15 +57,15 @@ const App = () => {
     setIsLoading(true);
     
     try {
-      const response = await axios.post('http://localhost:3001/create-session', {
+      const created = await api.session.createSession({
         userName: inputValue.trim(),
         userInput: inputValue.trim(),
       });
 
-      console.log('Session created successfully:', response.data);
+      console.log('Session created successfully:', created);
       
       const newUsername = inputValue.trim();
-      const { taskId: newTaskId, created_iso } = response.data;
+      const { taskId: newTaskId, created_iso } = created;
       
       // 立即更新状态和localStorage
       setUsername(newUsername);
@@ -105,12 +105,12 @@ const App = () => {
     setIsLoading(true);
 
     try {
-      const response = await axios.post('http://localhost:3001/create-session', {
+      const created = await api.session.createSession({
         userName: username,
         userInput: username,
       });
 
-      const { taskId: newTaskId } = response.data;
+      const { taskId: newTaskId } = created;
       setTaskId(newTaskId);
       localStorage.setItem('taskId', newTaskId);
     } catch (error) {
