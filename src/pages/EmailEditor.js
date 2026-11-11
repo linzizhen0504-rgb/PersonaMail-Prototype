@@ -9,7 +9,10 @@ import { useGlobalContext } from '../App';
 import FactorPanel, { useFactorSelection } from './FactorPanel';
 import SelectionRewriteBox, { CARD_BORDER_RADIUS } from './SelectionRewriteBox';
 import PlaceholderTable from './PlaceholderTable';
-import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholderFields, containsPlaceholder, removePlaceholder } from './placeholders';
+import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholderFields, containsPlaceholder, removePlaceholder } from '../domain/placeholders';
+import { plainText, locateUnitText, locateUnitRange, changedSentenceParts, levenshtein, shuffle } from '../domain/text';
+import { rewriteProblem } from '../domain/rewriteChecks';
+import { getNodeText, joinSelectedBlocks } from '../domain/nodes';
 import { RobotIcon } from '../icons';
 
 
@@ -71,35 +74,6 @@ const logEvent = (fields) => {
     });
 };
 
-// Character-level Levenshtein edit distance
-const levenshtein = (a, b) => {
-    const s = a || '';
-    const t = b || '';
-    if (s === t) return 0;
-    if (!s.length) return t.length;
-    if (!t.length) return s.length;
-    let prev = Array.from({ length: t.length + 1 }, (_, j) => j);
-    for (let i = 1; i <= s.length; i++) {
-        const curr = [i];
-        for (let j = 1; j <= t.length; j++) {
-            const cost = s[i - 1] === t[j - 1] ? 0 : 1;
-            curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
-        }
-        prev = curr;
-    }
-    return prev[t.length];
-};
-
-const shuffle = (items) => {
-    const arr = [...items];
-    for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
-};
-
-// Helper functions for text formatting
 const toggleFormat = (editor, format) => {
     try {
         const isActive = isFormatActive(editor, format);
@@ -170,137 +144,12 @@ const leavesFromSegments = (segments) => (segments.length === 0 ? [{ text: '' }]
 
 // Find a unit's text inside a paragraph: exact match first, then tolerant of whitespace and quote-style differences.
 // Returns {start, end} or null.
-const locateUnitText = (text, content) => {
-    if (!content) return null;
-    const exact = text.indexOf(content);
-    if (exact !== -1) return { start: exact, end: exact + content.length };
-    const escaped = content.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        .replace(/[\u2018\u2019']/g, "['\u2018\u2019]")
-        .replace(/[\u201c\u201d"]/g, '["\u201c\u201d]')
-        .replace(/\s+/g, '\\s+');
-    try {
-        const match = new RegExp(escaped).exec(text);
-        return match ? { start: match.index, end: match.index + match[0].length } : null;
-    } catch (error) {
-        return null;
-    }
-};
-
-// Where a unit sits in the editor paragraphs: inside one paragraph, or over several (a sign-off such as "With all my love," and the name
-// below it). Returns { first, last, start, end }: the first and last paragraph and the offsets in them; null when it is not there.
-const locateUnitRange = (paragraphs, content) => {
-    for (let i = 0; i < paragraphs.length; i++) {
-        const span = locateUnitText(paragraphs[i], content);
-        if (span) return { first: i, last: i, start: span.start, end: span.end };
-    }
-    const joined = paragraphs.join('\n\n');
-    const span = locateUnitText(joined, content);
-    if (!span) return null;
-    let offset = 0;
-    let range = { first: -1, last: -1, start: 0, end: 0 };
-    paragraphs.forEach((text, i) => {
-        const from = offset;
-        const to = offset + text.length;
-        if (range.first === -1 && span.start <= to) { range.first = i; range.start = Math.max(span.start - from, 0); }
-        if (range.last === -1 && span.end <= to) { range.last = i; range.end = Math.max(span.end - from, 0); }
-        offset = to + 2;
-    });
-    return range.first !== -1 && range.last !== -1 ? range : null;
-};
-
-// Plain form of a text for comparing: lower case, no punctuation, single spaces
-const plainText = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-
 // cards: the text of a version card with the sentences that are not in the current text marked green.
 // `oldTexts` are the texts the sentences are compared with (the unit as the rewriter saw it and as it is in the editor now).
 // A line break also ends a sentence, so a greeting or a sign-off without a full stop is compared on its own.
-const renderChangedSentences = (oldTexts, newText) => {
-    const split = (text) => String(text || '').split(/(?<=[.!?。！？])(\s+)|(\s*\n\s*)/).filter(part => part !== undefined);
-    const known = new Set();
-    oldTexts.forEach(text => split(text).forEach(part => { const key = plainText(part); if (key) known.add(key); }));
-    return split(newText).map((part, i) => {
-        if (!part.trim() || known.has(plainText(part))) return part;
-        return <span key={i} style={{ background: '#e3f5ea', color: '#137a3e', borderRadius: '3px', padding: '1px 2px' }}>{part}</span>;
-    });
-};
-
-// How often each longer sentence occurs in the given paragraphs
-const sentenceCounts = (texts) => {
-    const counts = new Map();
-    texts.forEach(text => {
-        String(text || '').split(/(?<=[.!?\u3002\uff01\uff1f])\s*/).forEach(sentence => {
-            const key = plainText(sentence);
-            if (key.length >= 20) counts.set(key, (counts.get(key) || 0) + 1);
-        });
-    });
-    return counts;
-};
-
-// Does a rewritten unit text break the email? It must not contain another unit's text, and putting it into the
-// paragraphs must not make any sentence appear more than once. Returns a reason, or null when it is fine.
-// `paragraphs` are the editor paragraph texts, `index` the paragraph that holds the unit's old text.
-const rewriteProblem = ({ unit, oldContent, newContent, otherUnits, paragraphs, index }) => {
-    const plainNew = plainText(newContent);
-    if (plainNew.length > plainText(oldContent).length * 3 + 60) return 'is much longer than the part it replaces';
-    const leaked = otherUnits.find(other => {
-        const plainOther = plainText(other.content);
-        return plainOther.length >= 12 && plainNew.includes(plainOther);
-    });
-    if (leaked) return `includes the text of another part (${leaked.title || leaked.id})`;
-    const span = locateUnitText(paragraphs[index], oldContent);
-    if (!span) return 'text not found in the editor';
-    const after = paragraphs.slice();
-    after[index] = paragraphs[index].slice(0, span.start) + newContent + paragraphs[index].slice(span.end);
-    const before = sentenceCounts(paragraphs);
-    for (const [key, count] of sentenceCounts(after)) {
-        if (count > 1 && count > (before.get(key) || 0)) return 'repeats text that is already in the email';
-    }
-    return null;
-};
-
-// Safe node text extraction
-const getNodeText = (editor, node) => {
-    try {
-        if (!node || typeof node !== 'object') {
-            return '';
-        }
-        
-        if (node.children && Array.isArray(node.children)) {
-            return node.children.map(child => {
-                if (typeof child === 'string') {
-                    return child;
-                } else if (child && typeof child === 'object' && child.text !== undefined) {
-                    return child.text;
-                } else if (child && child.children) {
-                    return getNodeText(editor, child);
-                }
-                return '';
-            }).join('');
-        }
-        
-        if (node.text !== undefined) {
-            return node.text;
-        }
-        
-        return '';
-    } catch (error) {
-        console.error('Error processing node:', node, error);
-        return '';
-    }
-};
-
-
-
-// The selected part of each paragraph from the start offset in the first to the end offset in the last, joined as paragraphs
-const joinSelectedBlocks = (blocks, startBlock, startOffset, endBlock, endOffset) => {
-    const pieces = [];
-    for (let i = startBlock; i <= endBlock; i++) {
-        const text = blocks[i] || '';
-        const piece = text.slice(i === startBlock ? startOffset : 0, i === endBlock ? endOffset : text.length);
-        if (piece.trim()) pieces.push(piece);
-    }
-    return pieces.join('\n\n');
-};
+const renderChangedSentences = (oldTexts, newText) => changedSentenceParts(oldTexts, newText).map((part, i) => (
+    part.changed ? <span key={i} style={{ background: '#e3f5ea', color: '#137a3e', borderRadius: '3px', padding: '1px 2px' }}>{part.text}</span> : part.text
+));
 
 // cards: the scrollbar of the body, drawn over the right side of the body card. The native scrollbar is hidden so that it takes no
 // column of its own; this one sits below the fixed subject line and toolbar and never covers them.
