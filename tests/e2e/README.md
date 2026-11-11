@@ -23,8 +23,14 @@ python3 journey.py "?pid=zz_e2e" after   # one script (the full user journey, 44
 | `selection_rewrite.py` | clicking a unit, "Describe changes", accept / discard, undo and redo (17 checks) |
 | `placeholders_live.py`, `placeholders_live2.py` | typing in the table fills the email live (18 + 8 checks) |
 | `placeholders_delete.py`, `placeholders_table.py`, `placeholders_examples.py`, `placeholders_tab.py`, `placeholders_ampersand.py` | delete icon, layout, "e.g." brackets, Tab between boxes, `A & B` brackets |
-| `propagation_window.py`, `propagation_multi_paragraph.py` | the window that asks before a change reaches other parts (real model and stubbed answers) |
+| `propagation_window.py` | the window that asks before a change reaches other parts, with the real model: the window opens exactly when the check says a part does not fit |
+| `propagation_window_stubbed.py`, `propagation_multi_paragraph.py` | the same window with stubbed answers, so every branch is deterministic: apply, skip, undo, some parts fit, all fit, the check fails; and a sign-off over two paragraphs |
 | `window_centered.py` | that window stays centred |
+
+**With the preference model down.** Start the backend with an unreachable model service, e.g.
+`PREFERENCE_URL=http://127.0.0.1:1 node server/index.js`, and run `PREFERENCE_DOWN=1 python3 journey.py "?pid=zz_e2e" after`:
+the whole journey must still work (cards in a random order), the page answers 503 from `/preference/update` and `/reset-session` is expected,
+and check 39 reads the log (`fallback_random`, `model_unavailable`). Restart the backend normally afterwards.
 
 The scripts use throw-away users and pids that start with `zz` (`ZZ...` sessions, `zz_*.jsonl` logs). After a run delete them:
 `rm -rf src/data/SessionData/ZZ* src/data/logs/zz_*.jsonl`. Never run them with the name of a real participant.

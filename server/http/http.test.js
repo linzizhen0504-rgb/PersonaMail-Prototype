@@ -8,6 +8,8 @@ const { createSessionService, createMemorySessionRepository } = require('../modu
 const { createFakeLlm } = require('../modules/llm/adapters/fake');
 const { createPromptStore } = require('../modules/prompts');
 const { createMemoryFactorCatalog } = require('../modules/catalog');
+const { createPreferenceService } = require('../modules/preference');
+const { PreferenceUnavailableError } = require('../contracts/errors');
 
 const PROMPTS = path.join(__dirname, '../../public/data/Prompts');
 let server;
@@ -16,13 +18,26 @@ let llm;
 let sessions;
 let experimentEvents;
 let apiEntries;
+let preferenceDown = false;
+const preferenceCalls = [];
 
 before(async () => {
     llm = createFakeLlm([]);
     sessions = createMemorySessionRepository();
     experimentEvents = [];
     apiEntries = [];
+    const modelAnswering = async (method, payload, result) => {
+        preferenceCalls.push({ method, payload });
+        if (preferenceDown) throw new PreferenceUnavailableError('connection refused');
+        return result;
+    };
     const app = createHttpApp({
+        preference: createPreferenceService({ preference: {
+            rank: (request) => modelAnswering('rank', request, { values: ['B', 'A'], ordering: 'preference', mmr_used: false, style_strength: 0.2, scores: { A: 1 }, style_scores: { A: 0 } }),
+            update: (event) => modelAnswering('update', event, { ok: true }),
+            rejectCheck: (request) => modelAnswering('rejectCheck', request, { reject_mean: 0.4, exceeds: true }),
+            resetSession: (request) => modelAnswering('resetSession', request, { ok: true })
+        } }),
         email: createEmailServices({ llm, sessions, prompts: createPromptStore({ dir: PROMPTS }), catalog: createMemoryFactorCatalog([]) }),
         session: createSessionService({ sessions }),
         experimentLog: { append: async (record) => { experimentEvents.push(record); } },
@@ -154,5 +169,84 @@ describe('the record of requests', () => {
         assert.equal(none.json.message, 'No logs found for 1999-01-01');
         assert.deepEqual((await call('DELETE', '/api-logs?date=2026-11-10&type=api')).json, { message: 'Deleted api-logs-2026-11-10.jsonl' });
         assert.equal((await call('DELETE', '/api-logs?date=1999-01-01&type=api')).status, 404);
+    });
+});
+
+describe('preference', () => {
+    const rankBody = { pid: 'P01', context: 'Equal', intent_dimension: 'Tone', k: 2, candidates: [{ value: 'A', text: 'a' }, { value: 'B', text: 'b' }, { value: 'C', text: 'c' }] };
+    const reset = () => { preferenceDown = false; preferenceCalls.length = 0; };
+
+    it('rank answers with the order of the model and says that it came from the model', async () => {
+        reset();
+        const response = await call('POST', '/preference/rank', rankBody);
+        assert.equal(response.status, 200);
+        assert.deepEqual(response.json.values, ['B', 'A']);
+        assert.equal(response.json.available, true);
+        assert.equal(response.json.style_strength, 0.2);
+        assert.deepEqual(preferenceCalls[0].payload, rankBody);
+    });
+
+    it('rank still answers when the model is down: a random order and available false', async () => {
+        reset();
+        preferenceDown = true;
+        const response = await call('POST', '/preference/rank', rankBody);
+        preferenceDown = false;
+        assert.equal(response.status, 200);
+        assert.equal(response.json.available, false);
+        assert.equal(response.json.ordering, 'fallback_random');
+        assert.equal(response.json.values.length, 2);
+    });
+
+    it('rank needs the participant, the context, the intent and the candidates', async () => {
+        reset();
+        for (const missing of ['pid', 'context', 'intent_dimension', 'candidates']) {
+            const body = { ...rankBody };
+            delete body[missing];
+            const response = await call('POST', '/preference/rank', body);
+            assert.equal(response.status, 400, missing);
+            assert.equal(response.json.code, 'VALIDATION');
+        }
+        assert.equal(preferenceCalls.length, 0);
+    });
+
+    it('update passes the event on', async () => {
+        reset();
+        const event = { pid: 'P01', context: 'Equal', intent_dimension: 'Tone', event: 'pick', chosen_value: 'A', shown_values: ['A', 'B'] };
+        const response = await call('POST', '/preference/update', event);
+        assert.deepEqual([response.status, response.json.ok], [200, true]);
+        assert.deepEqual(preferenceCalls[0], { method: 'update', payload: event });
+    });
+
+    it('update says 503 when the model is down, so that the page knows it was not recorded', async () => {
+        reset();
+        preferenceDown = true;
+        const response = await call('POST', '/preference/update', { pid: 'P01', context: 'Equal', intent_dimension: 'Tone', event: 'pick' });
+        preferenceDown = false;
+        assert.equal(response.status, 503);
+        assert.equal(response.json.code, 'PREFERENCE_UNAVAILABLE');
+    });
+
+    it('reject-check gives the answer of the model, or 503', async () => {
+        reset();
+        const body = { pid: 'P01', context: 'Equal', intent_dimension: 'Tone' };
+        assert.deepEqual((await call('POST', '/preference/reject-check', body)).json, { reject_mean: 0.4, exceeds: true });
+        preferenceDown = true;
+        assert.equal((await call('POST', '/preference/reject-check', body)).status, 503);
+        preferenceDown = false;
+    });
+
+    it('reset-session passes on, or says 503', async () => {
+        reset();
+        assert.equal((await call('POST', '/preference/reset-session', { pid: 'P01', session_id: 's' })).status, 200);
+        preferenceDown = true;
+        assert.equal((await call('POST', '/preference/reset-session', { pid: 'P01', session_id: 's' })).status, 503);
+        preferenceDown = false;
+    });
+
+    it('update, reject-check and reset-session need their fields', async () => {
+        reset();
+        assert.equal((await call('POST', '/preference/update', { pid: 'P01' })).status, 400);
+        assert.equal((await call('POST', '/preference/reject-check', { pid: 'P01' })).status, 400);
+        assert.equal((await call('POST', '/preference/reset-session', { pid: 'P01' })).status, 400);
     });
 });

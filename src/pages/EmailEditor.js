@@ -42,10 +42,11 @@ const getExperimentParams = () => {
 };
 const EXPERIMENT = getExperimentParams();
 
-// Preference model service; every request gets a short timeout
-const MODEL_SERVICE_URL = 'http://localhost:3003';
-const MODEL_TIMEOUT_MS = 2000;
-const callModel = (path, payload) => axios.post(`${MODEL_SERVICE_URL}${path}`, payload, { timeout: MODEL_TIMEOUT_MS });
+// The preference model is reached through the backend (/preference/...): the backend has the short timeout for the model service and
+// answers with a random order when it is down
+const PREFERENCE_API = 'http://localhost:3001/preference';
+const PREFERENCE_TIMEOUT_MS = 5000;
+const callModel = (path, payload) => axios.post(`${PREFERENCE_API}${path}`, payload, { timeout: PREFERENCE_TIMEOUT_MS });
 
 // Context of the current task: the participant's choice for the power/status factor, or "unknown"
 const POWER_FACTOR_ID = 'power_difference';
@@ -3032,6 +3033,16 @@ const markUnitAcrossParagraphs = (editorValue, componentContent, componentId) =>
             chosenVersions = ((ranked.data && ranked.data.values) || []).map(name => byValue.get(name)).filter(Boolean);
             if (candidates.length > 0 && chosenVersions.length === 0) throw new Error('empty ranking');
             ordering = ranked.data.ordering;
+            if (ranked.data.available === false) {
+                // the backend could not reach the preference model and chose a random order itself
+                logEvent({
+                    unit_id: unit.id,
+                    unit_title: unitTitle,
+                    intent_dimension: intent.dimension,
+                    event: 'model_unavailable',
+                    endpoint: 'rank'
+                });
+            }
             mmrUsed = !!ranked.data.mmr_used;
             styleStrength = ranked.data.style_strength;
             rankScores = ranked.data.scores || null;

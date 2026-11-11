@@ -28,11 +28,17 @@ class ModelOutputError extends AppError {
     constructor(message) { super(message, 'MODEL_OUTPUT'); }
 }
 
+/** The preference model cannot be reached: the app goes on without it (a client may fall back to something simple). */
+class PreferenceUnavailableError extends AppError {
+    constructor(message) { super(message, 'PREFERENCE_UNAVAILABLE'); }
+}
+
 // Model problems stay a 500 so that the answers clients get today do not change.
 const httpStatusFor = (error) => {
     if (error instanceof ValidationError) return 400;
     if (error instanceof NotFoundError) return 404;
+    if (error instanceof PreferenceUnavailableError) return 503;
     return 500;
 };
 
-module.exports = { AppError, ValidationError, NotFoundError, ModelUnavailableError, ModelOutputError, httpStatusFor };
+module.exports = { AppError, ValidationError, NotFoundError, ModelUnavailableError, ModelOutputError, PreferenceUnavailableError, httpStatusFor };

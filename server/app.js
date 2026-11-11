@@ -8,6 +8,7 @@ const { createFileSessionRepository, createSessionService } = require('./modules
 const { createExperimentLog, createApiLog } = require('./modules/logging');
 const { createFileFactorCatalog } = require('./modules/catalog');
 const { createEmailServices } = require('./modules/email');
+const { createModelServicePreference, createPreferenceService } = require('./modules/preference');
 
 function createAdapter(llmConfig) {
     if (llmConfig.provider === 'gemini') return createGeminiAdapter({ apiKey: llmConfig.apiKey, model: llmConfig.model });
@@ -21,10 +22,12 @@ function createServerApp(config, overrides = {}) {
     const sessions = assertPort(PORTS.SessionRepository, overrides.sessions || createFileSessionRepository({ root: config.dirs.sessions }));
     const prompts = assertPort(PORTS.PromptStore, overrides.prompts || createPromptStore({ dir: config.dirs.prompts }));
     const catalog = assertPort(PORTS.FactorCatalog, overrides.catalog || createFileFactorCatalog({ file: config.files.factorList }));
+    const preference = assertPort(PORTS.PreferencePort, overrides.preference || createModelServicePreference({ baseUrl: config.preference.url, timeoutMs: config.preference.timeoutMs }));
     const llm = assertPort(PORTS.LlmPort, overrides.llm || createLlm({ adapter: createAdapter(config.llm), log: apiLog }));
 
     return createHttpApp({
         email: createEmailServices({ llm, sessions, prompts, catalog }),
+        preference: createPreferenceService({ preference }),
         session: createSessionService({ sessions }),
         experimentLog,
         apiLog,

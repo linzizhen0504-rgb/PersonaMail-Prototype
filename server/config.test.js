@@ -42,4 +42,14 @@ describe('loadConfig', () => {
         assert.deepEqual(loadConfig({ GEMINI_API_KEY: 'K' }, { root: ROOT }).corsOrigins, ['http://localhost:3000', 'http://127.0.0.1:3000']);
         assert.deepEqual(loadConfig({ GEMINI_API_KEY: 'K', CORS_ORIGINS: 'http://a:1, http://b:2' }, { root: ROOT }).corsOrigins, ['http://a:1', 'http://b:2']);
     });
+
+    it('finds the preference model where the earlier versions of the page looked for it, with the same short timeout', () => {
+        const { preference } = loadConfig({ GEMINI_API_KEY: 'K' }, { root: ROOT });
+        assert.deepEqual(preference, { url: 'http://127.0.0.1:3003', timeoutMs: 2000 });
+    });
+
+    it('takes the address and the timeout of the preference model from the environment', () => {
+        const { preference } = loadConfig({ GEMINI_API_KEY: 'K', PREFERENCE_URL: 'http://m:9', PREFERENCE_TIMEOUT_MS: '500' }, { root: ROOT });
+        assert.deepEqual(preference, { url: 'http://m:9', timeoutMs: 500 });
+    });
 });

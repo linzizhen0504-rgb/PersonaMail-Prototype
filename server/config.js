@@ -15,6 +15,7 @@ function loadConfig(env, { root }) {
     return {
         port: Number(env.PORT) || 3001,
         llm,
+        preference: { url: env.PREFERENCE_URL || 'http://127.0.0.1:3003', timeoutMs: Number(env.PREFERENCE_TIMEOUT_MS) || 2000 },
         corsOrigins: env.CORS_ORIGINS ? env.CORS_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean) : DEFAULT_CORS_ORIGINS,
         dirs: {
             sessions: path.join(root, 'src/data/SessionData'),

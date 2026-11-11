@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { ValidationError, NotFoundError, ModelUnavailableError, ModelOutputError, httpStatusFor } = require('./errors');
+const { ValidationError, NotFoundError, ModelUnavailableError, ModelOutputError, PreferenceUnavailableError, httpStatusFor } = require('./errors');
 const { assertPort, PORTS } = require('./assertPort');
 
 describe('error to http status', () => {
@@ -15,6 +15,11 @@ describe('error to http status', () => {
     it('a model that cannot be reached or whose answer cannot be used is a 500 (as the clients know it)', () => {
         assert.equal(httpStatusFor(new ModelUnavailableError('timeout')), 500);
         assert.equal(httpStatusFor(new ModelOutputError('not json')), 500);
+    });
+
+    it('a preference model that cannot be reached is a 503, so a client can tell it from a failure of the server', () => {
+        assert.equal(httpStatusFor(new PreferenceUnavailableError('connection refused')), 503);
+        assert.equal(new PreferenceUnavailableError('x').code, 'PREFERENCE_UNAVAILABLE');
     });
 
     it('anything else is a 500', () => {

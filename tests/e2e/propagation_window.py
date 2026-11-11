@@ -84,52 +84,5 @@ with sync_playwright() as p:
     check('5 real model: consistency_checked is logged', len(ev)>before and last and not last['check_failed'], json.dumps(last)[:200] if last else '')
     if last: check('5b real model: the window opens exactly when a part does not fit', shown==bool(last['inconsistent_units']), f'shown={shown} inconsistent={last["inconsistent_units"]}')
     if shown: pg.locator(MODAL).get_by_role('button', name='Skip').click()
-    # 1. the check says "needs a change": the window opens, with the reason, and nothing is written before the user answers
-    stub_check(pg,'all'); before=snap()
-    use_until_asked(pg,src,d); pg.locator(MODAL).wait_for(timeout=60000)
-    check('1 a part that no longer fits opens the window', pg.locator(MODAL).count()==1)
-    check('1c nothing else changed while the window is open', all(unit_text(pg,u)==before[u] for u in others))
-    pg.wait_for_function("!document.querySelector('.ant-modal .ant-spin')", timeout=300000); pg.wait_for_timeout(500)
-    n=pg.locator('.propagation-item').count(); ready=pg.locator('.propagation-item input[type=checkbox]:not([disabled])').count()
-    check('1d every flagged unit is listed, rewrites arrive with changed sentences in green', n>=len(others) and ready>0 and pg.locator('.propagation-item span[style*="227, 245, 234"]').count()>0, f'items={n} ready={ready}')
-    if ready>=2: pg.locator('.propagation-item').nth(0).locator('input[type=checkbox]').uncheck(); pg.wait_for_timeout(300)
-    picked=[pg.locator('.propagation-item').nth(i).locator('strong').inner_text() for i in range(n) if pg.locator('.propagation-item').nth(i).locator('input[type=checkbox]').is_checked()]
-    pg.locator(MODAL).get_by_role('button', name='Apply selected').click(); pg.wait_for_timeout(2500)
-    after=snap(); changed=[u for u in others if after[u]!=before[u]]
-    check('1e the window closes and only the ticked units changed', pg.locator(MODAL).count()==0 and len(changed)==len(picked), f'changed={len(changed)} picked={picked}')
-    if changed:
-        pg.mouse.click(5,5); pg.keyboard.press('Meta+z'); pg.wait_for_timeout(1500)
-        check('1f Cmd+Z takes the rewrites back', all(unit_text(pg,u)==before[u] for u in others))
-    # 2. Skip leaves everything as it is
-    stub_check(pg,'all'); before=snap()
-    use(pg,src,d,1)
-    try:
-        pg.locator(MODAL).wait_for(timeout=60000); pg.locator(MODAL).get_by_role('button', name='Skip').click(); pg.wait_for_timeout(1500)
-        check('2 Skip changes nothing in the other units', pg.locator(MODAL).count()==0 and all(unit_text(pg,u)==before[u] for u in others))
-    except Exception as e: check('2 Skip changes nothing in the other units', False, str(e)[:80])
-    # 2b. only some parts no longer fit: every sharing unit is listed, the flagged ones ticked, the others unticked and marked as fitting
-    if len(others)>=2:
-        stub_check(pg,'mixed'); before=snap()
-        asked=use_until_asked(pg,src,d)
-        try:
-            pg.locator(MODAL).wait_for(timeout=30000 if asked else 1000); pg.wait_for_timeout(1500)
-            items=pg.locator('.propagation-item'); n=items.count()
-            ticked=[items.nth(i).locator('input[type=checkbox]').is_checked() for i in range(n)]
-            check('2b every sharing unit is listed; only the one that no longer fits is ticked', n==len(others) and sum(ticked)==1 and ticked[0], f'items={n} ticked={ticked}')
-            pg.locator(MODAL).get_by_role('button', name='Skip').click(); pg.wait_for_timeout(800)
-        except Exception as e: check('2b every sharing unit is listed; only the one that no longer fits is ticked', False, str(e)[:80])
-    # 3. the check says "all fit": no window, others untouched
-    stub_check(pg,'none'); before=snap(); CALLS.clear()
-    use(pg,src,d,2); pg.wait_for_timeout(8000)
-    check('3 when every other part still fits there is no window and nothing changes', pg.locator(MODAL).count()==0 and all(unit_text(pg,u)==before[u] for u in others))
-    check('3b the notice says they already fit (when the check was asked)', (not CALLS) or 'already fit' in pg.locator('.intentCards').inner_text(), f'asked={len(CALLS)}')
-    # 4. the check fails: every unit that shares the intent is offered
-    stub_check(pg,'fail'); before=snap()
-    use(pg,src,d,0)
-    try:
-        pg.locator(MODAL).wait_for(timeout=60000)
-        check('4 when the check fails every sharing unit is offered', pg.locator('.propagation-item').count()>=len(others))
-        pg.locator(MODAL).get_by_role('button', name='Skip').click(); pg.wait_for_timeout(800)
-    except Exception as e: check('4 when the check fails every sharing unit is offered', False, str(e)[:80])
     check('no page errors, no 4xx/5xx', not errs and not bad, f'{errs[:2]} {bad[:3]}')
     print(f'RESULT {sum(R)} / {len(R)}')

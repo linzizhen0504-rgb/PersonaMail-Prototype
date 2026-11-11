@@ -6,8 +6,9 @@ const { errorHandler } = require('./middleware/errors');
 const { sessionRoutes } = require('./routes/session');
 const { emailRoutes } = require('./routes/email');
 const { logRoutes } = require('./routes/logs');
+const { preferenceRoutes } = require('./routes/preference');
 
-function createHttpApp({ email, session, experimentLog, apiLog, corsOrigins }) {
+function createHttpApp({ email, session, preference, experimentLog, apiLog, corsOrigins }) {
     const app = express();
     // Only the pages of the app (and calls that come from no page at all) may read the answers
     app.use(cors({ origin: (origin, done) => done(null, !origin || corsOrigins.includes(origin) ? origin || true : false) }));
@@ -16,6 +17,7 @@ function createHttpApp({ email, session, experimentLog, apiLog, corsOrigins }) {
     app.use(logRoutes({ experimentLog, apiLog }));
     app.use(sessionRoutes({ session }));
     app.use(emailRoutes({ email }));
+    app.use(preferenceRoutes({ preference }));
     app.use(errorHandler);
     return app;
 }

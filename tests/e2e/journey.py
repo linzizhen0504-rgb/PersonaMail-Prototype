@@ -109,6 +109,8 @@ with sync_playwright() as p:
     left=pg.evaluate("()=>[...document.querySelectorAll('.factor-panel-sidebar .ant-checkbox-checked')].length")
     check('25b Clear All next to Tone Factors puts every option back to Not selected', left==0 and pg.locator('.factor-panel-sidebar').get_by_text('Not selected', exact=True).count()==16, f'left={left}')
     t=titles(pg); check('25 titles still centred', t and abs(t[0]-t[1])<1.5, str(t))
+    PREFERENCE_DOWN = bool(os.environ.get('PREFERENCE_DOWN'))   # set when the backend runs with an unreachable preference model (see README)
+    if PREFERENCE_DOWN: bad=[item for item in bad if '/preference/' not in item[1]]   # then 503 from /preference/update and /reset-session is the expected answer
     check('26 part 1: no page errors, no 4xx/5xx', not errs and not bad, f'{errs[:2]} {bad[:3]}')
     # ================= part 2: a draft with brackets (placeholders table) =================
     D="""Subject: Extension request for [Project Name]
@@ -165,6 +167,10 @@ Thank you,
         ctx3=b.new_context(viewport={'width':1700,'height':1100}); pg3=ctx3.new_page(); e3=[]; pg3.on('pageerror', lambda e: e3.append(str(e)[:200]))
         login(pg3,'ZZE2EC','?cond=baseline&pid=zz_e2e_c'); generate(pg3); wait_ready(pg3); dismiss_tip(pg3)
         check('38 ?cond=baseline is ignored: the cards interface opens', pg3.locator('[aria-label="Copy subject"]').count()==1 and pg3.get_by_role('button', name='Generate Components').count()==0 and pg3.get_by_role('button', name='Reset Editor').count()==0 and pg3.locator('.placeholder-table').count()==1 and not e3)
+    if PREFERENCE_DOWN:
+        events=[json.loads(line) for line in open(f'{PROJECT_ROOT}/src/data/logs/zz_e2e.jsonl')]
+        shown=[event for event in events if event['event']=='cards_shown']
+        check('39 preference model down: the cards still appear, in a random order, and the page logs model_unavailable', len(shown)>0 and all(event.get('ordering')=='fallback_random' for event in shown) and any(event['event']=='model_unavailable' and event.get('endpoint')=='rank' for event in events), str([event.get('ordering') for event in shown]))
     b.close()
 bad=[n for n,ok in R if not ok]
 print(f'RESULT {len(R)-len(bad)} / {len(R)}', 'FAILED: '+'; '.join(bad) if bad else '')
