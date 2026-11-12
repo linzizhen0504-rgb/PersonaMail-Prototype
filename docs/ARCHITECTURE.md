@@ -169,8 +169,7 @@ sends to `/update` (`pick`, `regenerate`, `leave`, `ai_edit`, and the new `manua
 cleared with it, and read with `POST /profile` (`/preference/profile` of the backend). Its statements ("tends to make texts shorter", "often adds new
 sentences", "mostly changes the wording only") are plain rules on counts and need two changes of evidence; each lists the values it comes from.
 
-It is used in three places:
-- **Shown** (only with `?profile=1`, see `src/domain/flags.js`): the Style tag of the component list and the reason line of the card the profile is clear about.
+It is used in two places (the writer never sees it; it only shows up in the logs as `profile_updated` and in `cards_shown`):
 - **Ranking**: `rank` adds `profile_weight × confidence × relative profile score`. The score is the closeness (MiniLM) of the value words of a card to the values
   the writer took, minus the closeness to the ones they passed over, plus a small length term; `reasons` and `recommended` come with it.
 - **Rewriting**: the page sends `styleProfile` (statements, values taken and passed over, the length to aim for) to `/intent-change-rewriter`; the prompt section is

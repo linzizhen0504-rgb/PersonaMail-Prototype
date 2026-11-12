@@ -1,4 +1,4 @@
-import { usableProfile, rewriterProfile, describeOperation, recommendationReason } from './styleProfile';
+import { usableProfile, rewriterProfile } from './styleProfile';
 
 const PROFILE = {
     available: true, ops_count: 5, strength: 0.6,
@@ -40,45 +40,5 @@ describe('rewriterProfile (what is sent to the rewriter)', () => {
         expect(rewriterProfile(null)).toBeNull();
         expect(rewriterProfile({ ...PROFILE, available: false })).toBeNull();
         expect(rewriterProfile({ ...PROFILE, traits: [], liked: [], disliked: [] })).toBeNull();
-    });
-});
-
-describe('describeOperation', () => {
-    it('says what an operation changed, in a line', () => {
-        expect(describeOperation({ kind: 'pick', dimension: 'Tone', value: 'Direct', added: 1, removed: 2, reworded: 0, length_change_pct: -40 }))
-            .toBe('Used "Direct": 40% shorter, 1 new sentence, 2 removed');
-    });
-
-    it('names the kind of operation and leaves out what did not change', () => {
-        expect(describeOperation({ kind: 'ai_edit', dimension: 'Tone', value: 'Formal', added: 0, removed: 0, reworded: 1, length_change_pct: 12 }))
-            .toBe('AI rewrite (Formal): 12% longer, only reworded');
-        expect(describeOperation({ kind: 'manual_edit', dimension: 'Tone', value: 'Direct', added: 0, removed: 0, reworded: 0, length_change_pct: 0 }))
-            .toBe('Edited by hand after "Direct": same length');
-    });
-});
-
-describe('recommendationReason (why a card is recommended; only for the card the model is clear about)', () => {
-    const reasons = {
-        Straight: { nearest_liked: { value: 'Direct', similarity: 0.912 }, length_change_pct: -30 },
-        Elaborate: { nearest_liked: { value: 'Direct', similarity: 0.1 }, length_change_pct: 40 }
-    };
-
-    it('names the card the model recommends, with the value taken that it is closest to and the length it would give', () => {
-        expect(recommendationReason('Straight', 'Straight', reasons)).toEqual({
-            headline: 'Matches your picks: Direct',
-            detail: 'Closest to "Direct" (similarity 0.91); would make the text 30% shorter.'
-        });
-    });
-
-    it('says longer for a longer text, and leaves the length out when it is not known', () => {
-        expect(recommendationReason('Elaborate', 'Elaborate', reasons).detail).toMatch(/40% longer/);
-        expect(recommendationReason('X', 'X', { X: { nearest_liked: { value: 'Direct', similarity: 0.8 }, length_change_pct: null } }).detail).toBe('Closest to "Direct" (similarity 0.80).');
-    });
-
-    it('is null for a card that is not the recommended one, and when nothing is recommended', () => {
-        expect(recommendationReason('Elaborate', 'Straight', reasons)).toBeNull();
-        expect(recommendationReason('Straight', null, reasons)).toBeNull();
-        expect(recommendationReason('Straight', undefined, undefined)).toBeNull();
-        expect(recommendationReason('Straight', 'Straight', {})).toBeNull();
     });
 });

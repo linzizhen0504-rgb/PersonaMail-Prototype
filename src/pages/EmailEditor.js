@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
 import { withHistory, HistoryEditor } from 'slate-history';
-import { Card, message, Button, Row, Col, Tag, Modal, Input, Spin, Tour, Checkbox, Tooltip } from 'antd';
+import { Card, message, Button, Row, Col, Tag, Modal, Input, Spin, Tour, Checkbox } from 'antd';
 import { api } from '../api';
 import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
@@ -14,9 +14,7 @@ import { locateUnitText, locateUnitRange, changedSentenceParts, levenshtein, shu
 import { rewriteProblem, sameAsCurrent } from '../domain/rewriteChecks';
 import { aiEditEvent } from '../domain/aiEdit';
 import { recordStyleExample, attachAnalysis, examplesFor, copiesNewContent } from '../domain/styleExamples';
-import { rewriterProfile, usableProfile, recommendationReason } from '../domain/styleProfile';
-import { profileVisible } from '../domain/flags';
-import StyleProfileChip from './StyleProfileChip';
+import { rewriterProfile, usableProfile } from '../domain/styleProfile';
 import { getNodeText, joinSelectedBlocks } from '../domain/nodes';
 import { propagationTargets, markUnit, highlightUnit, replaceUnit, shapeUnitText, keepSubjectPrefix } from '../domain/units';
 import { PAGE_TOP_PADDING, TITLE_ROW_HEIGHT, TITLE_GAP, EDITOR_RADIUS, COLORS, EDITOR_SHADOW, QUIET_SHADOW, FRAME_TOP, FRAME_BOTTOM, SUBJECT_GAP, SUBJECT_MIN_HEIGHT, TOOLBAR_PAD_TOP, TOOLBAR_PAD_BOTTOM, TOOLBAR_BUTTON_PAD_Y, INTENTS_TOP_PADDING, EDITOR_ROW_HEIGHT } from '../layout';
@@ -25,8 +23,6 @@ import { RobotIcon } from '../icons';
 
 // The Ask AI box is hidden; the handlers and backend endpoint stay in place
 const SHOW_ASK_AI = false;
-// The style profile is for a demonstration only: the address has to say ?profile=1 (see src/domain/flags.js)
-const SHOW_PROFILE = typeof window !== 'undefined' && profileVisible(window.location.search);
 
 // The participant (?pid=P01). The URL value overrides and refreshes the sessionStorage cache, which keeps it when the app navigates
 // and drops the query string. Every event is logged with cond "cards" (the only condition left) so the log format stays the same.
@@ -473,14 +469,12 @@ const EmailEditor = () => {
     // What the sender changed by using cards in this email (the last few); the other parts are rewritten in the same manner
     const styleExamplesRef = useRef([]);
     // What the preference model has learned about the writer in this email: the profile it keeps (see src/domain/styleProfile.js)
-    const [styleProfile, setStyleProfile] = useState(null);
     const styleProfileRef = useRef(null);
     const analysisPendingRef = useRef(null); // the analysis of the last used card (which sentences it added or removed), on its way
     const startNewStyleSession = () => {
         if (!globalTaskId) return;
         styleExamplesRef.current = [];
         styleProfileRef.current = null;
-        setStyleProfile(null);
         const previous = styleSessionId();
         draftVersionRef.current += 1;
         api.preference.resetSession({ pid: EXPERIMENT.pid, session_id: previous }).catch((resetError) => {
@@ -489,14 +483,13 @@ const EmailEditor = () => {
         });
     };
     // The profile of this email as the preference model has it now; asked again after every operation that teaches the model something.
-    // It is used by the rewrites (what the writer prefers) and shown with ?profile=1. When the model is down nothing is shown or sent.
+    // It is used by the rewrites (what the writer prefers). When the model is down nothing is sent.
     const refreshStyleProfile = () => {
         if (!globalTaskId) return null;
         const asked = styleSessionId();
         return api.preference.profile({ pid: EXPERIMENT.pid, session_id: asked }).then((profile) => {
             if (styleSessionId() !== asked) return null; // a new draft started in the meantime
             styleProfileRef.current = profile;
-            setStyleProfile(profile);
             if (usableProfile(profile)) {
                 logEvent({
                     event: 'profile_updated', ops_count: profile.ops_count, strength: profile.strength,
@@ -1709,10 +1702,6 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                                                 <Tag style={{ margin: 0, border: 'none', background: '#eaf1fd', color: '#2f6fde', fontSize: '12px', borderRadius: '5px' }}>
                                                     {item.value}
                                                 </Tag>
-                                                {SHOW_PROFILE && (() => {
-                                                    const why = recommendationReason(item.value, cardsState.recommended, cardsState.reasons);
-                                                    return why ? <Tooltip title={why.detail}><span style={{ marginLeft: '8px', fontSize: '12px', color: '#2f6fde' }}>{why.headline}</span></Tooltip> : null;
-                                                })()}
                                             </div>
                                             <div style={{ flex: 1, fontSize: '14px', lineHeight: 1.65, whiteSpace: 'pre-wrap', marginBottom: '14px' }}>
                                                 {renderChangedSentences([unit && unit.content, getUnitNodeText(selectedComponentId, valueRef.current)], item.content)}
@@ -2523,7 +2512,6 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         let styleScores = null;
         let profileScores = null;
         let recommended = null;
-        let reasons = null;
         try {
             const ranked = await api.preference.rank({
                 pid: EXPERIMENT.pid,
@@ -2553,8 +2541,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
             rankScores = ranked.scores || null;
             styleScores = ranked.style_scores || null;
             profileScores = ranked.profile_scores || null;
-            recommended = ranked.recommended || null; // the card the style profile is clear about (shown only with ?profile=1)
-            reasons = ranked.reasons || null;
+            recommended = ranked.recommended || null; // the card the style profile is clear about (it goes to the log)
         } catch (rankError) {
             console.warn('Preference model unavailable for /rank:', rankError.message);
             logEvent({
@@ -2587,7 +2574,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         });
         const display = {
             unitId: unit.id, unitTitle, dimension: intent.dimension, currentValue: intent.current_value, context,
-            sessionId, currentText: unit.content, styleStrength, candidateLog, rankScores, styleScores, recommended, reasons,
+            sessionId, currentText: unit.content, styleStrength, candidateLog, rankScores, styleScores,
             items, ordering, mmrUsed, trigger,
             loading: false, error: false, regenerating: false, regenError: false, ended: false, shownAt: Date.now()
         };
@@ -3673,10 +3660,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                                     justifyContent: 'space-between',
                                     gap: '8px'
                                 }}>
-                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                                        Email Components ({components.length})
-                                        {SHOW_PROFILE && <StyleProfileChip profile={styleProfile} />}
-                                    </span>
+                                    <span>Email Components ({components.length})</span>
                                     {<Button
                                             ref={generateButtonRef}
                                             data-leave-cards="true"
