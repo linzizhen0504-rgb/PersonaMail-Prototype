@@ -147,6 +147,15 @@ describe('preference', () => {
         http.calls.forEach(call => expect(call.config.timeout).toBe(5000));
     });
 
+    it('analyzeChange posts both texts to /preference/analyze-change and returns what changed', async () => {
+        const answer = { added: ['New.'], removed: [], reworded: 0, kept: 1, available: true };
+        const http = fakeHttp({ 'POST /preference/analyze-change': answer });
+        const data = await createApi({ http }).preference.analyzeChange({ before: 'Old.', after: 'Old. New.' });
+        expect(data).toEqual(answer);
+        expectValidRequest('preference-analyze-change', http.calls[0]);
+        expectValidAnswer('preference-analyze-change', data);
+    });
+
     it('lets the failure of the model through, so the page can tell that it was not recorded', async () => {
         const http = { post: async () => { throw Object.assign(new Error('Request failed with status code 503'), { response: { status: 503 } }); } };
         await expect(createApi({ http }).preference.update({})).rejects.toThrow(/503/);

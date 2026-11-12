@@ -35,6 +35,7 @@
  * PreferencePort: the preference model (which version a participant is likely to pick).
  *   rank(request) -> Promise<RankResult>            update(event) -> Promise<void>
  *   rejectCheck(request) -> Promise<Object>         resetSession(request) -> Promise<void>
+ *   analyzeChange({before, after}) -> Promise<{added, removed, reworded, kept}>  (what a used card changed, in sentences)
  *
  * ExperimentLog: the events of an experiment, one line per event.
  *   append(record: Object) -> Promise<void>
@@ -55,7 +56,7 @@ const PORTS = {
         name: 'SessionRepository',
         methods: ['createSession', 'hasSession', 'readDraft', 'writeDraft', 'readChoices', 'writeChoices', 'readIntents', 'writeIntents', 'readMeta', 'updateMeta', 'readFile']
     },
-    PreferencePort: { name: 'PreferencePort', methods: ['rank', 'update', 'rejectCheck', 'resetSession'] },
+    PreferencePort: { name: 'PreferencePort', methods: ['rank', 'update', 'rejectCheck', 'resetSession', 'analyzeChange'] },
     ExperimentLog: { name: 'ExperimentLog', methods: ['append'] },
     ApiLog: { name: 'ApiLog', methods: ['append', 'listDates', 'query', 'clear'] },
     FactorCatalog: { name: 'FactorCatalog', methods: ['list'] }

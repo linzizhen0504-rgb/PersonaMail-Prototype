@@ -40,3 +40,11 @@ STYLE_LEAVE_WEIGHT = -0.2
 AI_EDIT_MATCH_THRESHOLD = 0.40   # minimum cosine between the prompt and "dimension: value" to count as that value
 AI_EDIT_MATCH_MARGIN = 0.05      # the best value must beat the second best by this much, otherwise it is not guessed
 STYLE_AI_EDIT_WEIGHT = 1.0       # the AI text the user used counts like a chosen card
+
+# What a used card changed, sentence by sentence (change.py). A sentence of the new text is kept when it is this close to one of the old
+# ones, reworded when it is close enough to say the same, and added otherwise; an old sentence that nothing in the new text is close to
+# is removed. The two limits were checked by reading real cards of the study logs (see docs/ARCHITECTURE.md).
+CHANGE_KEPT_SIMILARITY = 0.9
+CHANGE_REWORDED_SIMILARITY = 0.55
+CHANGE_MAX_SENTENCES = 5     # listed per group
+CHANGE_MAX_LENGTH = 300      # characters of a listed sentence

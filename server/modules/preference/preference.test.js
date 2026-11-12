@@ -39,6 +39,14 @@ describe('model service adapter', () => {
         assert.deepEqual(calls.map(call => call.url), ['http://s/update', 'http://s/reject-check', 'http://s/reset-session']);
     });
 
+    it('asks the service what a used card changed, on the path of the service', async () => {
+        const reply = { added: ['New sentence.'], removed: [], reworded: 1, kept: 2 };
+        const { calls, post } = recording(reply);
+        const result = await createModelServicePreference({ baseUrl: 'http://s', post }).analyzeChange({ before: 'Old.', after: 'New sentence.' });
+        assert.deepEqual(result, reply);
+        assert.equal(calls[0].url, 'http://s/analyze-change');
+    });
+
     it('reports a service that cannot be reached as a PreferenceUnavailableError', async () => {
         const { post } = recording(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
         await assert.rejects(() => createModelServicePreference({ baseUrl: 'http://s', post }).rank(RANK),
@@ -129,5 +137,22 @@ describe('preference service', () => {
         await assert.rejects(() => createPreferenceService({ preference: unavailable() }).update({}), PreferenceUnavailableError);
         await assert.rejects(() => createPreferenceService({ preference: unavailable() }).rejectCheck({}), PreferenceUnavailableError);
         await assert.rejects(() => createPreferenceService({ preference: unavailable() }).resetSession({}), PreferenceUnavailableError);
+    });
+});
+
+describe('preference service: what a used card changed', () => {
+    const CHANGE = { before: 'Old.', after: 'New sentence.' };
+
+    it('gives the analysis of the model and says it was available', async () => {
+        const preference = createFakePreference({ analyzeChange: { added: ['New sentence.'], removed: ['Old.'], reworded: 0, kept: 0 } });
+        const result = await createPreferenceService({ preference }).analyzeChange(CHANGE);
+        assert.deepEqual(result, { added: ['New sentence.'], removed: ['Old.'], reworded: 0, kept: 0, available: true });
+        assert.deepEqual(preference.calls[0], { method: 'analyzeChange', payload: CHANGE });
+    });
+
+    it('says nothing could be analysed (instead of failing) when the model is down', async () => {
+        const preference = createFakePreference({ failWith: new PreferenceUnavailableError('down') });
+        const result = await createPreferenceService({ preference }).analyzeChange(CHANGE);
+        assert.deepEqual(result, { added: [], removed: [], reworded: 0, kept: 0, available: false });
     });
 });

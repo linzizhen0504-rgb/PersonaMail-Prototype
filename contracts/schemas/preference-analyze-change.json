@@ -1,0 +1,57 @@
+{
+  "name": "preference-analyze-change",
+  "method": "POST",
+  "path": "/preference/analyze-change",
+  "description": "What a used card changed in a text, in sentences: the new ones, the removed ones, and how many were only reworded or kept",
+  "request": {
+    "type": "object",
+    "properties": {
+      "before": {
+        "type": "string"
+      },
+      "after": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "before",
+      "after"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "added": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "removed": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "reworded": {
+        "type": "integer"
+      },
+      "kept": {
+        "type": "integer"
+      },
+      "available": {
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "added",
+      "removed",
+      "reworded",
+      "kept",
+      "available"
+    ]
+  }
+}

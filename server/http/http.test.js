@@ -36,7 +36,8 @@ before(async () => {
             rank: (request) => modelAnswering('rank', request, { values: ['B', 'A'], ordering: 'preference', mmr_used: false, style_strength: 0.2, scores: { A: 1 }, style_scores: { A: 0 } }),
             update: (event) => modelAnswering('update', event, { ok: true }),
             rejectCheck: (request) => modelAnswering('rejectCheck', request, { reject_mean: 0.4, exceeds: true }),
-            resetSession: (request) => modelAnswering('resetSession', request, { ok: true })
+            resetSession: (request) => modelAnswering('resetSession', request, { ok: true }),
+            analyzeChange: (request) => modelAnswering('analyzeChange', request, { added: ['New.'], removed: [], reworded: 0, kept: 1 })
         } }),
         email: createEmailServices({ llm, sessions, prompts: createPromptStore({ dir: PROMPTS }), catalog: createMemoryFactorCatalog([]) }),
         session: createSessionService({ sessions }),
@@ -298,6 +299,28 @@ describe('preference', () => {
         for (const candidates of ['Direct and formal', [{ dimension: 'Tone' }], [{ value: 'A' }]]) {
             const response = await call('POST', '/preference/update', { ...base, candidates });
             assert.equal(response.status, 400, JSON.stringify(candidates));
+        }
+        assert.equal(preferenceCalls.length, 0);
+    });
+
+    it('analyze-change gives what a used card changed, and says so when nothing could be analysed', async () => {
+        reset();
+        const body = { before: 'Old text.', after: 'Old text. New.' };
+        const response = await call('POST', '/preference/analyze-change', body);
+        assert.equal(response.status, 200);
+        assert.deepEqual(response.json, { added: ['New.'], removed: [], reworded: 0, kept: 1, available: true });
+        assert.deepEqual(preferenceCalls[0], { method: 'analyzeChange', payload: body });
+        preferenceDown = true;
+        const down = await call('POST', '/preference/analyze-change', body);
+        preferenceDown = false;
+        assert.equal(down.status, 200);
+        assert.equal(down.json.available, false);
+    });
+
+    it('analyze-change needs both texts as strings', async () => {
+        reset();
+        for (const body of [{ before: 'a' }, { after: 'a' }, { before: 1, after: 'a' }]) {
+            assert.equal((await call('POST', '/preference/analyze-change', body)).status, 400, JSON.stringify(body));
         }
         assert.equal(preferenceCalls.length, 0);
     });

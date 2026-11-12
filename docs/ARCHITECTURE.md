@@ -134,6 +134,32 @@ Errors are typed (`server/contracts/errors.js`): `ValidationError` (400), `NotFo
 Work is done test first (red, green, refactor): a failing test, then the least code that passes, then tidying. A bug gets a test that
 reproduces it before it is fixed.
 
+## What a used card changed (propagation window)
+
+After **Use**, the preference service (`model_service/change.py`, `POST /analyze-change`, through `POST /preference/analyze-change` of the backend) splits the text
+of the part before and after into sentences with the MiniLM embeddings and says which sentences are new, which are gone and how many were only reworded
+(cosine of 0.9 or more = kept, 0.55 or more = reworded; both limits are in `model_service/config.py`). The page puts this next to the text before and
+after into the rewrite of the other parts that share the intent (`styleExamples`, `server/modules/email/styleExamples.js`).
+
+It was chosen after comparing three analyses on the study logs (64 used cards, 52 replayed picks; read-only script, no model call):
+
+| Analysis | Result |
+|---|---|
+| Sentence difference (this one) | Read on real cards it gave sensible answers (a pleasantry added, a reason added, a bracket replaced, an offer removed); 80% agreement with a plain word-overlap check on "did the content change" |
+| Style labels (7 axes made from contrast sentences) | The axis named by the value was the top label for 30% of the cards, top two for 43% (chance 29%): not used |
+| Accumulated preference as labels | Top-1 33% of the next picks, as good as chance; the vector the ranking uses reached 40%: not passed on to the rewriter |
+
+The samples are small (30 to 64), so the two rejected analyses are rejected for the label list that was tried, not for every possible list.
+
+Constraints that follow from the weak points seen:
+- The analysis also carries content (a sentence like "I hope your week is going well!"). The prompt says it only shows what kind of change was made, never to copy it
+  or to add a greeting, pleasantry or closing that is not the part's own job; the page also rejects a rewrite that contains a sentence the used card added
+  (`copiesNewContent`, sentences of 20 characters or more) and asks once more.
+- Only the examples of the same intent are sent (`examplesFor`); what was changed for another intent says nothing about this one.
+- Only the last three used cards, each text cut to 600 characters, at most five sentences per list and 300 characters per sentence.
+- When the preference service is down the analysis is empty (`available: false`) and the rewrite goes on with the examples alone; the page waits at most 1.5
+  seconds for it. Every analysis is written to the log (`card_change_analyzed`), so that it can be checked afterwards.
+
 ## Known limits and to do
 
 - **Split `EmailEditor.js` (about 4,200 lines).** It still holds the editor (Slate), the version cards, the propagation window, the sidebar

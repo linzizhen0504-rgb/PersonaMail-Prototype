@@ -1,4 +1,4 @@
-import { isIndependentUnit, propagationTargets, markUnit, highlightUnit, replaceUnit, unitText, shapeUnitText } from './units';
+import { isIndependentUnit, propagationTargets, markUnit, highlightUnit, replaceUnit, unitText, shapeUnitText, keepSubjectPrefix } from './units';
 
 const paragraph = (...leaves) => ({ type: 'paragraph', children: leaves.map(leaf => (typeof leaf === 'string' ? { text: leaf } : leaf)) });
 const texts = (value) => value.map(node => node.children.map(child => child.text).join(''));
@@ -171,5 +171,40 @@ describe('unitText and shapeUnitText', () => {
         expect(shapeUnitText('Warmly,\n  \nMia', true)).toBe('Warmly,\n\nMia');
         expect(shapeUnitText('Warmly,\n[Name]  \n[ID]', true)).toBe('Warmly,\n[Name]  \n[ID]');
         expect(shapeUnitText('Hello,\n\nthere  friend', false)).toBe('Hello, there  friend');
+    });
+});
+
+describe('the subject line keeps its "Subject:" prefix (it is what tells the subject from the body)', () => {
+    const withSubject = () => [paragraph('Subject: Quick heads-up / fridge leftovers'), paragraph('Hey Sam,'), paragraph('About the cake.')];
+
+    it('REPRODUCTION: writing a version that left the prefix out into the editor must not turn the subject into the first line of the body', () => {
+        const replaced = replaceUnit(withSubject(), 'Subject: Quick heads-up / fridge leftovers', 'Really upset about last night\'s missing cake', 'subject_line');
+        expect(texts(replaced.value)[0]).toBe('Subject: Really upset about last night\'s missing cake');
+    });
+
+    it('keepSubjectPrefix puts the prefix of the old text in front of a version that left it out', () => {
+        expect(keepSubjectPrefix('Subject: Quick heads-up', 'Really upset about the cake')).toBe('Subject: Really upset about the cake');
+    });
+
+    it('a version that has the prefix is written in as it is (the prefix is not doubled)', () => {
+        const old = 'Subject: Quick heads-up / fridge leftovers';
+        const replaced = replaceUnit(withSubject(), old, 'Subject: Really upset about the cake', 'subject_line');
+        expect(texts(replaced.value)[0]).toBe('Subject: Really upset about the cake');
+    });
+
+    it('leaves a version that has the prefix alone, whatever its case and spacing', () => {
+        expect(keepSubjectPrefix('Subject: A', 'Subject: B')).toBe('Subject: B');
+        expect(keepSubjectPrefix('Subject: A', 'subject:B')).toBe('subject:B');
+        expect(keepSubjectPrefix('Subject: A', '  SUBJECT : B')).toBe('  SUBJECT : B');
+    });
+
+    it('copies the prefix as the old text wrote it', () => {
+        expect(keepSubjectPrefix('SUBJECT:  A', 'B')).toBe('SUBJECT:  B');
+    });
+
+    it('does nothing for a text that is not a subject line', () => {
+        expect(keepSubjectPrefix('Dear Professor Lee,', 'Hello Professor Lee,')).toBe('Hello Professor Lee,');
+        expect(keepSubjectPrefix('', 'x')).toBe('x');
+        expect(keepSubjectPrefix(null, 'x')).toBe('x');
     });
 });

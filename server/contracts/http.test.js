@@ -45,6 +45,22 @@ describe('the http contract (contracts/schemas)', () => {
         assert.ok(endpoint.validateRequest({ userName: 42, userInput: 'x' }).some(message => /userName/.test(message)));
     });
 
+    it('the rewriter accepts what the sender already changed, and refuses an example that is not complete', () => {
+        const endpoint = byName('intent-change-rewriter');
+        const base = {
+            userName: 'mia', taskId: 'mia_2026-11-10T12-44-41-888Z', userTask: 'x', draftLatest: 'x', componentCurrent: 'x',
+            intentSelected: { dimension: 'Tone', current_value: 'Warm' }, intentOthers: []
+        };
+        assert.deepEqual(endpoint.validateRequest(base), []);
+        assert.deepEqual(endpoint.validateRequest({ ...base, styleExamples: [{ dimension: 'Tone', value: 'Warm', before: 'a', after: 'b' }] }), []);
+        assert.ok(endpoint.validateRequest({ ...base, styleExamples: [{ dimension: 'Tone', value: 'Warm', before: 'a' }] }).length > 0);
+        assert.ok(endpoint.validateRequest({ ...base, styleExamples: 'Warm' }).length > 0);
+        const example = { dimension: 'Tone', value: 'Warm', before: 'a', after: 'b' };
+        assert.deepEqual(endpoint.validateRequest({ ...base, styleExamples: [{ ...example, analysis: { added: ['New.'], removed: [], reworded: 1, kept: 0 } }] }), []);
+        assert.ok(endpoint.validateRequest({ ...base, styleExamples: [{ ...example, analysis: { added: 'New.', removed: [] } }] }).length > 0);
+        assert.ok(endpoint.validateRequest({ ...base, styleExamples: [{ ...example, analysis: { added: ['1', '2', '3', '4', '5', '6'], removed: [] } }] }).length > 0);
+    });
+
     it('lets a request carry fields the contract does not know (older and newer pages)', () => {
         assert.deepEqual(byName('create-session').validateRequest({ userName: 'mia', userInput: 'x', extra: true }), []);
     });

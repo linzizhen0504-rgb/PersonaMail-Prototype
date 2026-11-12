@@ -30,6 +30,12 @@ function preferenceRoutes({ preference, check }) {
         res.json(await preference.resetSession(need(req.body, ['pid', 'session_id'])));
     }));
 
+    router.post('/preference/analyze-change', check('preference-analyze-change'), route(async (req, res) => {
+        const { before, after } = req.body;
+        if (typeof before !== 'string' || typeof after !== 'string' || !after.trim()) throw new ValidationError('before and after must be texts');
+        res.json(await preference.analyzeChange({ before, after }));
+    }));
+
     return router;
 }
 

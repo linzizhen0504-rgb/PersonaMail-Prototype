@@ -19,12 +19,13 @@ function createModelServicePreference({ baseUrl, timeoutMs = 2000, post = axios.
         rank: (request) => call('/rank', request),
         update: (event) => call('/update', event),
         rejectCheck: (request) => call('/reject-check', request),
-        resetSession: (request) => call('/reset-session', request)
+        resetSession: (request) => call('/reset-session', request),
+        analyzeChange: (request) => call('/analyze-change', request)
     };
 }
 
 // A PreferencePort for tests: answers with what it was given, remembers the calls, or fails with the error it was given
-function createFakePreference({ rank, rejectCheck, failWith } = {}) {
+function createFakePreference({ rank, rejectCheck, analyzeChange, failWith } = {}) {
     const calls = [];
     const run = async (method, payload, result) => {
         calls.push({ method, payload });
@@ -36,7 +37,8 @@ function createFakePreference({ rank, rejectCheck, failWith } = {}) {
         rank: (request) => run('rank', request, rank),
         update: (event) => run('update', event, { ok: true }),
         rejectCheck: (request) => run('rejectCheck', request, rejectCheck || { reject_mean: 0, exceeds: false }),
-        resetSession: (request) => run('resetSession', request, { ok: true })
+        resetSession: (request) => run('resetSession', request, { ok: true }),
+        analyzeChange: (request) => run('analyzeChange', request, analyzeChange || { added: [], removed: [], reworded: 0, kept: 0 })
     };
 }
 
@@ -74,7 +76,16 @@ function createPreferenceService({ preference, random = Math.random }) {
         },
         update: (event) => preference.update(event),
         rejectCheck: (request) => preference.rejectCheck(request),
-        resetSession: (request) => preference.resetSession(request)
+        resetSession: (request) => preference.resetSession(request),
+        // What a used card changed. When the model is down the answer is "nothing", marked as not available (the page then goes on without it)
+        async analyzeChange(request) {
+            try {
+                return { ...(await preference.analyzeChange(request)), available: true };
+            } catch (error) {
+                if (!(error instanceof PreferenceUnavailableError)) throw error;
+                return { added: [], removed: [], reworded: 0, kept: 0, available: false };
+            }
+        }
     };
 }
 

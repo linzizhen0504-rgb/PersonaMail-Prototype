@@ -13,8 +13,9 @@ import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholder
 import { locateUnitText, locateUnitRange, changedSentenceParts, levenshtein, shuffle } from '../domain/text';
 import { rewriteProblem, sameAsCurrent } from '../domain/rewriteChecks';
 import { aiEditEvent } from '../domain/aiEdit';
+import { recordStyleExample, attachAnalysis, examplesFor, copiesNewContent } from '../domain/styleExamples';
 import { getNodeText, joinSelectedBlocks } from '../domain/nodes';
-import { propagationTargets, markUnit, highlightUnit, replaceUnit, shapeUnitText } from '../domain/units';
+import { propagationTargets, markUnit, highlightUnit, replaceUnit, shapeUnitText, keepSubjectPrefix } from '../domain/units';
 import { PAGE_TOP_PADDING, TITLE_ROW_HEIGHT, TITLE_GAP, EDITOR_RADIUS, COLORS, EDITOR_SHADOW, QUIET_SHADOW, FRAME_TOP, FRAME_BOTTOM, SUBJECT_GAP, SUBJECT_MIN_HEIGHT, TOOLBAR_PAD_TOP, TOOLBAR_PAD_BOTTOM, TOOLBAR_BUTTON_PAD_Y, INTENTS_TOP_PADDING, EDITOR_ROW_HEIGHT } from '../layout';
 import { RobotIcon } from '../icons';
 
@@ -464,8 +465,12 @@ const EmailEditor = () => {
     // late event of a display from the previous draft cannot leak into it; the old session is cleared afterwards.
     const draftVersionRef = useRef(0);
     const styleSessionId = () => `${globalTaskId}:${draftVersionRef.current}`;
+    // What the sender changed by using cards in this email (the last few); the other parts are rewritten in the same manner
+    const styleExamplesRef = useRef([]);
+    const analysisPendingRef = useRef(null); // the analysis of the last used card (which sentences it added or removed), on its way
     const startNewStyleSession = () => {
         if (!globalTaskId) return;
+        styleExamplesRef.current = [];
         const previous = styleSessionId();
         draftVersionRef.current += 1;
         api.preference.resetSession({ pid: EXPERIMENT.pid, session_id: previous }).catch((resetError) => {
@@ -2680,7 +2685,8 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         // A unit in one paragraph stays one line; one over several paragraphs (a sign-off and the name below it) keeps its paragraphs
         const unitRange = locateUnitRange(value.map(node => getNodeText(null, node)), component.content);
         const coversSeveralParagraphs = Boolean(unitRange) && unitRange.first !== unitRange.last;
-        const newContent = shapeUnitText(item.content, coversSeveralParagraphs);
+        // the subject line keeps its "Subject:" prefix, also when the version left it out (see keepSubjectPrefix)
+        const newContent = keepSubjectPrefix(component.content, shapeUnitText(item.content, coversSeveralParagraphs));
         const oldNodeText = getUnitNodeText(cards.unitId, value);
         const replacedText = oldNodeText === null || coversSeveralParagraphs ? newContent : oldNodeText.replace(component.content, newContent);
 
@@ -2719,6 +2725,20 @@ const Toolbar = ({ compact = false, trailing = null }) => {
             startedAt: Date.now(),
             entered: false
         };
+
+        const usedChange = { dimension: cards.dimension, value: item.value, before: component.content, after: newContent };
+        styleExamplesRef.current = recordStyleExample(styleExamplesRef.current, usedChange);
+        // The preference model says which sentences the card added or removed; the rewrites of the other parts are told (see proposeUnitRewrite)
+        analysisPendingRef.current = api.preference.analyzeChange({ before: usedChange.before, after: usedChange.after }).then((analysis) => {
+            if (!analysis || !analysis.available) return;
+            styleExamplesRef.current = attachAnalysis(styleExamplesRef.current, usedChange, analysis);
+            logEvent({
+                unit_id: cards.unitId, unit_title: cards.unitTitle, intent_dimension: cards.dimension, event: 'card_change_analyzed', chosen_value: item.value,
+                added: analysis.added, removed: analysis.removed, reworded: analysis.reworded, kept: analysis.kept
+            });
+        }).catch((analysisError) => {
+            console.warn('Could not analyse what the card changed:', analysisError.message);
+        });
 
         // The other units that share this intent are checked against the new value; the ones that no longer fit are offered the change
         proposeIntentChange({
@@ -2859,6 +2879,10 @@ const Toolbar = ({ compact = false, trailing = null }) => {
             .filter(i => i.dimension !== intentSelected.dimension)
             .map(i => ({ dimension: i.dimension, current_value: i.current_value }));
         let lastProblem = 'No version returned';
+        // Wait a moment for the analysis of the used card; without it the rewrite goes on with the examples alone
+        if (analysisPendingRef.current) await Promise.race([analysisPendingRef.current, new Promise(resolve => setTimeout(resolve, 1500))]);
+        // Only what was changed for this intent says something about how to change it here
+        const examples = examplesFor(styleExamplesRef.current, intentSelected.dimension);
         for (let attempt = 0; attempt < 2; attempt++) {
             const response = await api.intents.rewrite({
                 userName: globalUsername,
@@ -2871,20 +2895,23 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                     current_value: intentSelected.current_value,
                     other_values: intentSelected.other_values
                 },
-                intentOthers
+                intentOthers,
+                ...(examples.length > 0 ? { styleExamples: examples } : {})
             });
             const variation = ((response && response.component_variations) || [])
                 .find(v => v && v.intent_value === intentSelected.current_value);
             if (!variation || typeof variation.content !== 'string' || !variation.content.trim()) continue;
+            // A sentence the used card added to its own part (a greeting, a reason) must not be pasted into this one
+            if (copiesNewContent(variation.content, examples)) { lastProblem = 'check: copies a sentence the used card added to another part'; continue; }
             const paragraphs = valueRef.current.map(node => getNodeText(null, node));
             const current = componentsRef.current.find(c => c.id === unit.id);
             const oldContent = current ? current.content : unit.content;
             const range = locateUnitRange(paragraphs, oldContent);
             if (!range) { lastProblem = 'locate: text not found in the editor'; break; }
             // A unit inside one paragraph stays in it; one that covers several paragraphs keeps its paragraph breaks
-            const cleaned = range.first === range.last
+            const cleaned = keepSubjectPrefix(oldContent, range.first === range.last
                 ? variation.content.replace(/\s*\n+\s*/g, ' ').trim()
-                : variation.content.split(/\s*\n+\s*/).map(part => part.trim()).filter(Boolean).join('\n\n');
+                : variation.content.split(/\s*\n+\s*/).map(part => part.trim()).filter(Boolean).join('\n\n'));
             const problem = rewriteProblem({
                 unit, oldContent, newContent: cleaned,
                 otherUnits: combinedResultsRef.current.filter(u => u.id !== unit.id),

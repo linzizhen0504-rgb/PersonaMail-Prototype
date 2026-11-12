@@ -90,9 +90,21 @@ const sliceLeaves = (node, from, to) => {
 // The unit with another text. A unit over several paragraphs is replaced by the paragraphs of the new text (a blank line ends one);
 // the text before and after it in its first and last paragraph stays. Gives { value, range, paragraphs } (where it was, and the
 // paragraphs it covers now) or null when its old text is not in the editor.
-export const replaceUnit = (value, oldContent, newContent, componentId, { highlight } = {}) => {
+// The subject of an email is the paragraph that starts with "Subject:", and the editor tells the subject from the body by that prefix.
+// A version of the subject line that leaves the prefix out would turn the subject into the first line of the body, so the prefix of the
+// old text is put back in front of it (as the old text wrote it).
+const SUBJECT_PREFIX = /^\s*subject\s*:\s*/i;
+export const keepSubjectPrefix = (oldContent, newContent) => {
+    const next = String(newContent === undefined || newContent === null ? '' : newContent);
+    const prefix = SUBJECT_PREFIX.exec(String(oldContent || ''));
+    if (!prefix || SUBJECT_PREFIX.test(next)) return next;
+    return prefix[0].replace(/^\s+/, '') + next.replace(/^\s+/, '');
+};
+
+export const replaceUnit = (value, oldContent, newContentGiven, componentId, { highlight } = {}) => {
     const range = locateUnitRange(paragraphTexts(value), oldContent);
     if (!range) return null;
+    const newContent = keepSubjectPrefix(oldContent, newContentGiven);
     // the new text is highlighted as the unit was, unless `highlight` says otherwise
     const highlighted = highlight !== undefined ? highlight
         : value.slice(range.first, range.last + 1).some(node => (node.children || []).some(child => child.highlight));

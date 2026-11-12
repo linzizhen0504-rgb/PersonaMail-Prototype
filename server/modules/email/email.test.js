@@ -142,6 +142,17 @@ describe('rewriteForIntent', () => {
         assert.ok(llm.prompts[0].includes('exactly 2 items') && llm.prompts[0].includes('["Warm","Cool"]'));
     });
 
+    it('puts what the sender already changed into the prompt when it is given, and leaves the prompt alone when it is not', async () => {
+        await sessions.writeChoices(ref, FAMILIAR);
+        const answer = { component_variations: [{ intent_value: 'Warm', content: 'a' }, { intent_value: 'Cool', content: 'b' }] };
+        llm.queue(answer, answer);
+        await email.rewriteForIntent(request());
+        await email.rewriteForIntent(request({ styleExamples: [{ dimension: 'Length', value: 'Detailed', before: 'Short text.', after: 'A much longer text with detail.' }] }));
+        assert.ok(!llm.prompts[0].includes('already changed'));
+        assert.ok(llm.prompts[1].includes('already changed') && llm.prompts[1].includes('A much longer text with detail.'));
+        assert.ok(llm.prompts[1].includes('exactly 2 items'));
+    });
+
     it('drops an empty version and asks again when no version of another value is left', async () => {
         await sessions.writeChoices(ref, FAMILIAR);
         llm.queue({ component_variations: [{ intent_value: 'Warm', content: 'a' }, { intent_value: 'Cool', content: '  ' }] },
