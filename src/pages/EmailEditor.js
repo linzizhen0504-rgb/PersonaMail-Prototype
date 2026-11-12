@@ -9,12 +9,13 @@ import { useGlobalContext } from '../App';
 import FactorPanel, { useFactorSelection } from './FactorPanel';
 import SelectionRewriteBox, { CARD_BORDER_RADIUS } from './SelectionRewriteBox';
 import PlaceholderTable from './PlaceholderTable';
-import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholderFields, containsPlaceholder, removePlaceholder } from '../domain/placeholders';
+import { fillPlaceholders, knownPlaceholderKeys, segmentFill, collectPlaceholderFields, containsPlaceholder, hasNarrativePlaceholder, removePlaceholder } from '../domain/placeholders';
 import { locateUnitText, locateUnitRange, changedSentenceParts, levenshtein, shuffle } from '../domain/text';
-import { rewriteProblem } from '../domain/rewriteChecks';
+import { rewriteProblem, sameAsCurrent } from '../domain/rewriteChecks';
+import { aiEditEvent } from '../domain/aiEdit';
 import { getNodeText, joinSelectedBlocks } from '../domain/nodes';
 import { propagationTargets, markUnit, highlightUnit, replaceUnit, shapeUnitText } from '../domain/units';
-import { PAGE_TOP_PADDING, TITLE_ROW_HEIGHT, TITLE_GAP, EDITOR_RADIUS, FRAME_TOP, FRAME_BOTTOM, SUBJECT_GAP, SUBJECT_MIN_HEIGHT, TOOLBAR_PAD_TOP, TOOLBAR_PAD_BOTTOM, TOOLBAR_BUTTON_PAD_Y, INTENTS_TOP_PADDING, EDITOR_ROW_HEIGHT } from '../layout';
+import { PAGE_TOP_PADDING, TITLE_ROW_HEIGHT, TITLE_GAP, EDITOR_RADIUS, COLORS, EDITOR_SHADOW, QUIET_SHADOW, FRAME_TOP, FRAME_BOTTOM, SUBJECT_GAP, SUBJECT_MIN_HEIGHT, TOOLBAR_PAD_TOP, TOOLBAR_PAD_BOTTOM, TOOLBAR_BUTTON_PAD_Y, INTENTS_TOP_PADDING, EDITOR_ROW_HEIGHT } from '../layout';
 import { RobotIcon } from '../icons';
 
 
@@ -1565,7 +1566,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                 </Col>
                 <Col span={6} style={{ height: '100%' }}>
                     <div style={{ padding: '16px', borderLeft: '1px solid #f0f0f0', background: '#fff', height: '100%', boxSizing: 'border-box' }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '12px', fontSize: '14px', color: '#595959', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '12px', fontSize: '14px', color: COLORS.titleText, boxShadow: QUIET_SHADOW, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                             <span>Email Components</span>
                             <Button size="small" disabled>Regenerate</Button>
                         </div>
@@ -1595,7 +1596,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                 <style>{`
                     .vc-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
                     @media (max-width: 900px) { .vc-grid { grid-template-columns: 1fr; } }
-                    .vc-card { display: flex; flex-direction: column; background: #fff; border: 1px solid #e3e5e8; border-radius: ${CARD_BORDER_RADIUS}; padding: 14px; }
+                    .vc-card { display: flex; flex-direction: column; background: #fff; border: 1px solid ${COLORS.hairline}; border-radius: ${CARD_BORDER_RADIUS}; padding: 14px; }
                     .vc-card:hover { border-color: #b9c7e6; }
                 `}</style>
                 {intents.length === 0 ? (
@@ -2127,6 +2128,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
     const acceptRewrite = () => {
         const box = rewriteBoxStateRef.current;
         if (!box || box.status !== 'preview') return;
+        const openCards = cardsRef.current;
         const { selectedText, startIndex, newText, prompt } = box;
         const clearHighlight = () => {
             try {
@@ -2135,10 +2137,10 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                 console.warn('Could not clear the selection highlight:', error);
             }
         };
-        const finish = (extra) => logEvent({
+        const finish = (extra) => { learnFromAiEdit(box, openCards); return logEvent({
             unit_id: box.unitId, unit_title: box.unitTitle, event: 'selection_rewrite_applied', selected_text: selectedText, prompt,
             new_text: newText, duration_ms: box.requestedAt ? Date.now() - box.requestedAt : null, mode: box.mode, trigger: box.trigger || 'selection', ...extra
-        });
+        }); };
         const draftOf = (blocks) => blocks.filter(text => text.trim()).join('\n\n');
         const saveDraft = (draft) => api.drafts.save(globalTaskId, draft)
             .catch(error => console.error('Error saving draft to sessionData:', error));
@@ -2311,6 +2313,32 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         throw updateError;
     });
 
+    // The user used text the AI wrote for a prompt instead of taking a card: the preference model learns from it (the value the prompt
+    // asks for, and the style of the change). Cards that were open for the part and are now dropped count as left.
+    const learnFromAiEdit = (box, openCards) => {
+        if (openCards && cardsRef.current !== openCards && !openCards.loading && !openCards.error && openCards.items.length > 0) {
+            const update = endDisplay(openCards, 'leave');
+            if (update) update.catch(() => {});
+        }
+        const unit = box.mode === 'unit' && !box.multi ? combinedResultsRef.current.find(u => u.id === box.unitId) : null;
+        const event = aiEditEvent({
+            pid: EXPERIMENT.pid, context: logContext, sessionId: styleSessionId(), unit,
+            prompt: box.prompt, beforeText: box.selectedText, afterText: box.newText
+        });
+        if (!event) return;
+        api.preference.update(event).then((answer) => {
+            logEvent({
+                unit_id: box.unitId, unit_title: box.unitTitle, event: 'ai_edit_learned', prompt: event.prompt,
+                learned: Boolean(answer && answer.updated), // false: the model service answered but did not learn (e.g. it still runs old code)
+                matched_dimension: answer && answer.matched ? answer.matched.dimension : null,
+                matched_value: answer && answer.matched ? answer.matched.value : null
+            });
+        }).catch((updateError) => {
+            console.warn('Preference model unavailable for /update:', updateError.message);
+            logEvent({ unit_id: box.unitId, unit_title: box.unitTitle, event: 'model_unavailable', endpoint: 'update' });
+        });
+    };
+
     // cards: a display ends exactly once, as pick, regenerate or leave. The event is logged and the model
     // is updated with the same event. Returns the /update promise (rejects if the model is unavailable).
     const endDisplay = (cards, event, extra = {}) => {
@@ -2408,15 +2436,20 @@ const Toolbar = ({ compact = false, trailing = null }) => {
             const variations = response && response.component_variations;
             if (!Array.isArray(variations)) throw new Error('No versions returned');
             const seenValues = new Set();
+            // a version that reads the same as the text the part has now is not offered (it would change nothing)
+            const currentTexts = [unit.content, getUnitNodeText(unit.id, valueRef.current)];
             const versions = variations.filter(v => {
                 if (!v || v.intent_value === intent.current_value || typeof v.content !== 'string' || seenValues.has(v.intent_value)) return false;
+                if (sameAsCurrent(currentTexts, v.content)) return false;
                 seenValues.add(v.intent_value);
                 return true;
             });
             const paragraphs = valueRef.current.map(node => getNodeText(null, node));
             const index = paragraphs.findIndex(text => !!locateUnitText(text, unit.content));
             const otherUnits = combinedResultsRef.current.filter(u => u.id !== unit.id);
-            const sound = index === -1 ? versions : versions.filter(v =>
+            // a card says it in words: a version that still holds an instruction in brackets ("[mention the current stage, e.g., ...]") is not offered
+            const complete = versions.filter(v => !hasNarrativePlaceholder(v.content));
+            const sound = index === -1 ? complete : complete.filter(v =>
                 !rewriteProblem({ unit, oldContent: unit.content, newContent: v.content, otherUnits, paragraphs, index }));
             filtered += versions.length - sound.length;
             if (sound.length > 0 || versions.length === 0) {
@@ -3287,8 +3320,8 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                 height: 'calc(100vh - 64px)',
                 position: 'sticky',
                 top: 0,
-                background: '#fff',
-                borderRight: '1px solid #f0f0f0'
+                background: COLORS.sidebarBackground,
+                borderRight: `1px solid ${COLORS.hairline}`
             }}
         >
             <FactorPanel
@@ -3367,7 +3400,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                     borderRadius: EDITOR_RADIUS,
                     flex: 1,
                     minHeight: 0,
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                    boxShadow: EDITOR_SHADOW,
                     overflow:'auto !important'
                 }}
                 bodyStyle={{
@@ -3537,7 +3570,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                             <div 
                                 style={{
                                     padding: '16px',
-                                    borderLeft: '1px solid #f0f0f0',
+                                    borderLeft: `1px solid ${COLORS.hairline}`,
                                     background: '#fff',
                                     display: 'flex',
                                     flexDirection: 'column',
@@ -3548,7 +3581,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                                     fontWeight: 'bold', 
                                     marginBottom: '12px',
                                     fontSize: '14px',
-                                    color: '#595959',
+                                    color: COLORS.titleText,
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',

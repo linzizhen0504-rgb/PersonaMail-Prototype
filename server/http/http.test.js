@@ -280,6 +280,28 @@ describe('preference', () => {
         assert.deepEqual(preferenceCalls[0], { method: 'update', payload: event });
     });
 
+    it('update passes an ai_edit event on with its prompt, texts and candidate values', async () => {
+        reset();
+        const event = {
+            pid: 'P01', context: 'Equal', intent_dimension: 'Tone', event: 'ai_edit', session_id: 's1',
+            prompt: 'make it more formal', current_text: 'Dear Prof,', new_text: 'Respected Professor,',
+            candidates: [{ dimension: 'Tone', value: 'Direct and formal' }]
+        };
+        const response = await call('POST', '/preference/update', event);
+        assert.equal(response.status, 200);
+        assert.deepEqual(preferenceCalls[0], { method: 'update', payload: event });
+    });
+
+    it('update refuses ai_edit candidates that are not {dimension, value} pairs', async () => {
+        reset();
+        const base = { pid: 'P01', context: 'Equal', intent_dimension: 'Tone', event: 'ai_edit', prompt: 'x' };
+        for (const candidates of ['Direct and formal', [{ dimension: 'Tone' }], [{ value: 'A' }]]) {
+            const response = await call('POST', '/preference/update', { ...base, candidates });
+            assert.equal(response.status, 400, JSON.stringify(candidates));
+        }
+        assert.equal(preferenceCalls.length, 0);
+    });
+
     it('update says 503 when the model is down, so that the page knows it was not recorded', async () => {
         reset();
         preferenceDown = true;

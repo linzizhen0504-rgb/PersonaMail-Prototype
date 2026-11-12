@@ -32,6 +32,12 @@ export const isNarrativePlaceholder = (inner) => {
     return options.every(option => option.split(/\s+/).length >= 3) || options.every(option => /^[a-z]/.test(option));
 };
 
+// Does a text carry an instruction for the writer in brackets, such as [mention current stage, e.g., midway through the analysis]? A version
+// card must not: it has to say it in words. Such a bracket can be longer than a field name is (PLACEHOLDER_PATTERN stops at 60
+// characters), so it is looked for in a wider range.
+const ANY_BRACKET = /\[[^[\]\n]{1,300}\]/g;
+export const hasNarrativePlaceholder = (text) => (String(text || '').match(ANY_BRACKET) || []).some(match => isNarrativePlaceholder(match.slice(1, -1)));
+
 // Keys of the brackets that do not contain a slash: evidence that a slash without spaces, as in [Course Name/Section
 // Number], separates two fields when one side is such a field. [Position/Role] stays one field.
 export const knownPlaceholderKeys = (text) => {

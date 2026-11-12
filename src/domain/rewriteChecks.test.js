@@ -1,4 +1,4 @@
-import { sentenceCounts, rewriteProblem } from './rewriteChecks';
+import { sentenceCounts, rewriteProblem, sameAsCurrent } from './rewriteChecks';
 
 const plainTextLength = (text) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim().length;
 const LONG = 'This is a sentence that is longer than twenty characters.';
@@ -59,5 +59,31 @@ describe('rewriteProblem', () => {
     it('lets a sentence that was already twice stay twice', () => {
         const twice = ['I would love to catch up with you over coffee this week.', 'Could we meet on Friday afternoon?', 'I would love to catch up with you over coffee this week.'];
         expect(check({ paragraphs: twice, index: 1 })).toBeNull();
+    });
+});
+
+describe('sameAsCurrent', () => {
+    it('a version identical to the current text is the same', () => {
+        expect(sameAsCurrent(['Dear Professor Zhang,'], 'Dear Professor Zhang,')).toBe(true);
+    });
+
+    it('a version that differs only in the closing punctuation is the same (Zhang: vs Zhang,)', () => {
+        expect(sameAsCurrent(['Dear Professor Zhang,'], 'Dear Professor Zhang:')).toBe(true);
+    });
+
+    it('differences in case and spacing do not make a version new', () => {
+        expect(sameAsCurrent(['Dear Professor Zhang,'], 'dear  professor ZHANG,')).toBe(true);
+    });
+
+    it('a version with other words is new', () => {
+        expect(sameAsCurrent(['Dear Professor Zhang,'], 'Respected Professor Zhang,')).toBe(false);
+    });
+
+    it('is the same when it equals any of the given current texts (the unit as analysed and as it is in the editor now)', () => {
+        expect(sameAsCurrent(['Dear Prof. Zhang,', 'Dear Professor Zhang,'], 'Dear Professor Zhang:')).toBe(true);
+    });
+
+    it('an empty version is not counted as the same', () => {
+        expect(sameAsCurrent(['Dear Professor Zhang,'], '')).toBe(false);
     });
 });

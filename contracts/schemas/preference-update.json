@@ -2,7 +2,7 @@
   "name": "preference-update",
   "method": "POST",
   "path": "/preference/update",
-  "description": "Tell the preference model how a display of versions ended",
+  "description": "Tell the preference model how a display of versions ended (pick, regenerate, leave), or that the user used AI-written text instead of a card (ai_edit)",
   "request": {
     "type": "object",
     "properties": {
@@ -44,6 +44,35 @@
         "type": "array",
         "items": {
           "type": "string"
+        }
+      },
+      "prompt": {
+        "type": "string",
+        "description": "ai_edit: what the user asked the AI to do"
+      },
+      "new_text": {
+        "type": "string",
+        "description": "ai_edit: the text the user used (current_text is the text before)"
+      },
+      "candidates": {
+        "type": "array",
+        "description": "ai_edit: the values the part can move to, which the prompt is matched with",
+        "items": {
+          "type": "object",
+          "properties": {
+            "dimension": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "dimension",
+            "value"
+          ]
         }
       }
     },

@@ -31,3 +31,15 @@ export const EDITOR_ROW_EXTRA = (ORIGINAL_PAGE_TOP_PADDING - PAGE_TOP_PADDING) +
 export const EDITOR_ROW_HEIGHT = 500 + EDITOR_ROW_EXTRA;
 
 export const EDITOR_RADIUS = 8;                // the corner radius of the editor box, its white card and the subject row
+
+// The visual order: the editor first, then the sidebar, then the components and the intents. All areas are white cards with the same
+// hairline border; only the editor card has a (soft, two layers) shadow. Titles stay dark: the order comes from size and shadow, not
+// from greying the other areas out.
+export const COLORS = {
+    editorText: '#1f1f1f',
+    titleText: '#262626',
+    sidebarBackground: '#ffffff',
+    hairline: '#eceef1',
+};
+export const EDITOR_SHADOW = '0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.06)';
+export const QUIET_SHADOW = 'none';

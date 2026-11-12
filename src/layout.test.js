@@ -49,3 +49,27 @@ describe('the corners of the editor', () => {
         expect(require('./layout').EDITOR_RADIUS).toBe(8);
     });
 });
+
+describe('the visual order: editor, then sidebar, then components and intents', () => {
+    const L = require('./layout');
+    const channel = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    const luminance = (hex) => { const n = parseInt(hex.slice(1), 16); return 0.2126 * channel(n >> 16) + 0.7152 * channel((n >> 8) & 255) + 0.0722 * channel(n & 255); };
+    const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+
+    it('every area is a white card: the sidebar is white, not grey', () => {
+        expect(L.COLORS.sidebarBackground).toBe('#ffffff');
+    });
+
+    it('the titles of the areas are dark (contrast of 7 or more on white), not a middle grey', () => {
+        expect(contrast(L.COLORS.titleText, '#ffffff')).toBeGreaterThanOrEqual(7);
+    });
+
+    it('the editor card has a soft shadow of two layers; the other areas have none', () => {
+        expect(L.EDITOR_SHADOW.match(/rgba/g)).toHaveLength(2);
+        expect(L.QUIET_SHADOW).toBe('none');
+    });
+
+    it('there is no button that goes grey when the draft exists: the generate button stays primary', () => {
+        expect(L.generateButtonType).toBeUndefined();
+    });
+});

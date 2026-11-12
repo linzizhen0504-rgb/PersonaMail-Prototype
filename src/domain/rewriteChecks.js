@@ -34,3 +34,10 @@ export const rewriteProblem = ({ unit, oldContent, newContent, otherUnits, parag
     }
     return null;
 };
+
+// Is a version no different from the text the unit has now? Case, punctuation and spacing do not count as a difference, the same as when
+// the changed sentences are marked green. `currentTexts` are the texts it is compared with (as analysed, and as it is in the editor).
+export const sameAsCurrent = (currentTexts, newContent) => {
+    const key = plainText(newContent);
+    return key !== '' && currentTexts.some(text => plainText(text) === key);
+};

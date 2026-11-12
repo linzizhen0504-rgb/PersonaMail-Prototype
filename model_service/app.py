@@ -38,6 +38,9 @@ class UpdateRequest(BaseModel):
     session_id: Optional[str] = None
     current_text: Optional[str] = None
     shown_texts: Optional[List[str]] = None
+    prompt: Optional[str] = None          # ai_edit: what the user asked the AI
+    new_text: Optional[str] = None        # ai_edit: the text the user used (current_text is the text before)
+    candidates: Optional[List[dict]] = None  # ai_edit: [{dimension, value}] the part can move to
 
 
 class ResetSessionRequest(BaseModel):
@@ -85,7 +88,8 @@ def create_app(model=None):
         return model.update(req.pid, req.context, req.intent_dimension,
                             req.event, req.chosen_value, req.shown_values,
                             session_id=req.session_id, current_text=req.current_text,
-                            shown_texts=req.shown_texts)
+                            shown_texts=req.shown_texts, prompt=req.prompt, new_text=req.new_text,
+                            candidates=req.candidates)
 
     @app.post("/reset-session")
     def reset_session(req: ResetSessionRequest):

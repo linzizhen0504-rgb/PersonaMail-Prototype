@@ -15,6 +15,7 @@ ACCEPT, REJECT = 0, 1
 LEGACY_EVENTS = {"edit": "pick", "reject_all": "regenerate"}
 CHOSEN_EVENTS = {"pick"}
 UNCHOSEN_EVENTS = {"regenerate", "leave"}
+AI_EDIT_EVENT = "ai_edit"
 
 
 def normalize(text):
@@ -253,12 +254,8 @@ class PreferenceModel:
         }
 
     # ----- updates -----
-    def update(self, pid, context, dimension, event, chosen_value, shown_values=None,
-               session_id=None, current_text=None, shown_texts=None):
-        event = canonical_event(event)
-        increments = event_increments(event, chosen_value, shown_values)
-        if not increments:
-            return {"updated": False, "counts": {}, "tally": None}
+    def _count(self, pid, context, dimension, event, increments):
+        """Add the increments to the records of the values (created with their prior when new) and to the shows tally."""
         with self.store.lock:
             counts = self.store.load_counts()
             touched = {}
@@ -286,16 +283,61 @@ class PreferenceModel:
                 counts["shows"].append(tally)
             tally["chosen_shows" if event in CHOSEN_EVENTS else "reject_all_shows"] += 1
             self.store.save_counts(counts)
-
-        style_strength = None
-        if session_id:
-            style_strength = self._update_style(pid, session_id, event, chosen_value, shown_values, shown_texts, current_text).strength
         return {
             "updated": True,
             "counts": {record["value"]: record["counts"] for record in touched.values()},
             "tally": {"reject_all_shows": tally["reject_all_shows"], "chosen_shows": tally["chosen_shows"]},
-            "style_strength": style_strength,
         }
+
+    def match_prompt(self, prompt, candidates):
+        """The value a prompt such as "make it more formal" asks for: the candidate ({dimension, value}) whose
+        "dimension: value" text is closest to the prompt, only if it is close enough and clearly ahead of the others."""
+        if not str(prompt or "").strip() or not candidates:
+            return None
+        embedding = self.embedder.embed(prompt)
+        scored = sorted(((cosine(embedding, self.embedder.embed(text_for(c["dimension"], c["value"]))), c) for c in candidates),
+                        key=lambda item: item[0], reverse=True)
+        best_score, best = scored[0]
+        if best_score < config.AI_EDIT_MATCH_THRESHOLD:
+            return None
+        if len(scored) > 1 and best_score - scored[1][0] < config.AI_EDIT_MATCH_MARGIN:
+            return None
+        return {"dimension": best["dimension"], "value": best["value"], "similarity": round(float(best_score), 4)}
+
+    def _update_ai_edit(self, pid, context, session_id, prompt, current_text, new_text, candidates):
+        """The user did not take a card but used text the AI wrote for a prompt. A clear match of the prompt with one of
+        the values counts as a pick of that value; the style of the change is learned in any case."""
+        matched = self.match_prompt(prompt, candidates)
+        result = {"updated": False, "counts": {}, "tally": None, "matched": matched}
+        if matched:
+            increments = [(matched["value"], ACCEPT)]
+            result.update(self._count(pid, context, matched["dimension"], "pick", increments))
+        if session_id and new_text and current_text:
+            with self.store.lock:
+                styles = self.store.load_styles()
+                key = self._style_key(pid, session_id)
+                state = StyleState.from_dict(styles[key]) if key in styles else StyleState()
+                state.add(self.style_feature(matched["value"] if matched else prompt, new_text, current_text),
+                          config.STYLE_AI_EDIT_WEIGHT)
+                styles[key] = state.to_dict()
+                self.store.save_styles(styles)
+            result["updated"] = True
+            result["style_strength"] = state.strength
+        return result
+
+    def update(self, pid, context, dimension, event, chosen_value, shown_values=None,
+               session_id=None, current_text=None, shown_texts=None, prompt=None, new_text=None, candidates=None):
+        event = canonical_event(event)
+        if event == AI_EDIT_EVENT:
+            return self._update_ai_edit(pid, context, session_id, prompt, current_text, new_text, candidates)
+        increments = event_increments(event, chosen_value, shown_values)
+        if not increments:
+            return {"updated": False, "counts": {}, "tally": None}
+        counted = self._count(pid, context, dimension, event, increments)
+        style_strength = None
+        if session_id:
+            style_strength = self._update_style(pid, session_id, event, chosen_value, shown_values, shown_texts, current_text).strength
+        return {**counted, "style_strength": style_strength}
 
     @staticmethod
     def _find_tally(counts, pid, context, dimension):

@@ -35,3 +35,8 @@ STYLE_PICK_WEIGHT = 1.0       # chosen card
 STYLE_SIBLING_WEIGHT = -0.3   # cards shown next to the chosen one
 STYLE_REGENERATE_WEIGHT = -0.5
 STYLE_LEAVE_WEIGHT = -0.2
+
+# The user changed the text with the AI instead of taking a card (event "ai_edit"): the prompt is matched with the values the part can move to
+AI_EDIT_MATCH_THRESHOLD = 0.40   # minimum cosine between the prompt and "dimension: value" to count as that value
+AI_EDIT_MATCH_MARGIN = 0.05      # the best value must beat the second best by this much, otherwise it is not guessed
+STYLE_AI_EDIT_WEIGHT = 1.0       # the AI text the user used counts like a chosen card

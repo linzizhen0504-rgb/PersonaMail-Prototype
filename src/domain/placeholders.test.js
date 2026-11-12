@@ -41,3 +41,28 @@ describe('isNarrativePlaceholder', () => {
         expect(isNarrativePlaceholder('Last Name')).toBe(false);
     });
 });
+
+describe('hasNarrativePlaceholder (a version card must not carry an instruction for the writer)', () => {
+    const { hasNarrativePlaceholder } = require('./placeholders');
+
+    it('finds the long instruction brackets of the cards in question (more than 60 characters, so they are not fields)', () => {
+        expect(hasNarrativePlaceholder('I still need to [mention remaining work, e.g., conduct the final analysis and draft the conclusion], which requires more time.')).toBe(true);
+        expect(hasNarrativePlaceholder('I am currently [mention current stage, e.g., midway through the data analysis phase], and I need a few days.')).toBe(true);
+    });
+
+    it('finds the short ones too: a reason, a next step, a list of things to pick from', () => {
+        expect(hasNarrativePlaceholder('I am sorry for [briefly state your reason, e.g., an illness].')).toBe(true);
+        expect(hasNarrativePlaceholder('The next step is [mention the next step].')).toBe(true);
+        expect(hasNarrativePlaceholder('He keeps [stealing my food / snuggling in bed / snacking].')).toBe(true);
+    });
+
+    it('does not mind brackets that are plain facts the sender fills in later', () => {
+        expect(hasNarrativePlaceholder('Dear Professor [Professor\'s Last Name], my [Course Name] project is due on [Original Due Date].')).toBe(false);
+    });
+
+    it('is false for a text without brackets, and for an empty text', () => {
+        expect(hasNarrativePlaceholder('A recent illness has set me back on my schedule.')).toBe(false);
+        expect(hasNarrativePlaceholder('')).toBe(false);
+        expect(hasNarrativePlaceholder(null)).toBe(false);
+    });
+});
