@@ -116,6 +116,44 @@
             "after"
           ]
         }
+      },
+      "styleProfile": {
+        "type": "object",
+        "description": "What the sender prefers in this email, learned from their choices so far (the style profile of the preference model)",
+        "properties": {
+          "traits": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string"
+            }
+          },
+          "liked": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string"
+            }
+          },
+          "disliked": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string"
+            }
+          },
+          "lengthChangePct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "traits",
+          "liked",
+          "disliked"
+        ]
       }
     },
     "additionalProperties": true,

@@ -37,7 +37,8 @@ before(async () => {
             update: (event) => modelAnswering('update', event, { ok: true }),
             rejectCheck: (request) => modelAnswering('rejectCheck', request, { reject_mean: 0.4, exceeds: true }),
             resetSession: (request) => modelAnswering('resetSession', request, { ok: true }),
-            analyzeChange: (request) => modelAnswering('analyzeChange', request, { added: ['New.'], removed: [], reworded: 0, kept: 1 })
+            analyzeChange: (request) => modelAnswering('analyzeChange', request, { added: ['New.'], removed: [], reworded: 0, kept: 1 }),
+            profile: (request) => modelAnswering('profile', request, { ops_count: 1, strength: 0.2, liked: [], disliked: [], stats: { changes: 1 }, traits: [], recent: [] })
         } }),
         email: createEmailServices({ llm, sessions, prompts: createPromptStore({ dir: PROMPTS }), catalog: createMemoryFactorCatalog([]) }),
         session: createSessionService({ sessions }),
@@ -315,6 +316,28 @@ describe('preference', () => {
         preferenceDown = false;
         assert.equal(down.status, 200);
         assert.equal(down.json.available, false);
+    });
+
+    it('profile gives the profile of an email, and says so when the model is down', async () => {
+        reset();
+        const body = { pid: 'P01', session_id: 's1' };
+        const response = await call('POST', '/preference/profile', body);
+        assert.equal(response.status, 200);
+        assert.equal(response.json.available, true);
+        assert.deepEqual(preferenceCalls[0], { method: 'profile', payload: body });
+        preferenceDown = true;
+        const down = await call('POST', '/preference/profile', body);
+        preferenceDown = false;
+        assert.equal(down.status, 200);
+        assert.equal(down.json.available, false);
+    });
+
+    it('profile needs the participant and the session', async () => {
+        reset();
+        for (const body of [{ pid: 'P01' }, { session_id: 's1' }, {}]) {
+            assert.equal((await call('POST', '/preference/profile', body)).status, 400, JSON.stringify(body));
+        }
+        assert.equal(preferenceCalls.length, 0);
     });
 
     it('analyze-change needs both texts as strings', async () => {

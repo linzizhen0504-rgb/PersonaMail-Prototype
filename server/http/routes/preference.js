@@ -36,6 +36,10 @@ function preferenceRoutes({ preference, check }) {
         res.json(await preference.analyzeChange({ before, after }));
     }));
 
+    router.post('/preference/profile', check('preference-profile'), route(async (req, res) => {
+        res.json(await preference.profile(need(req.body, ['pid', 'session_id'])));
+    }));
+
     return router;
 }
 

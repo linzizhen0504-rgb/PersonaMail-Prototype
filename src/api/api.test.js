@@ -156,6 +156,15 @@ describe('preference', () => {
         expectValidAnswer('preference-analyze-change', data);
     });
 
+    it('profile posts the participant and the session to /preference/profile and returns the profile', async () => {
+        const answer = { available: true, ops_count: 1, strength: 0.2, liked: [], disliked: [], stats: { changes: 1 }, traits: [], recent: [] };
+        const http = fakeHttp({ 'POST /preference/profile': answer });
+        const data = await createApi({ http }).preference.profile({ pid: 'P01', session_id: 't1:1' });
+        expect(data).toEqual(answer);
+        expectValidRequest('preference-profile', http.calls[0]);
+        expectValidAnswer('preference-profile', data);
+    });
+
     it('lets the failure of the model through, so the page can tell that it was not recorded', async () => {
         const http = { post: async () => { throw Object.assign(new Error('Request failed with status code 503'), { response: { status: 503 } }); } };
         await expect(createApi({ http }).preference.update({})).rejects.toThrow(/503/);

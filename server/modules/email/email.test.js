@@ -153,6 +153,17 @@ describe('rewriteForIntent', () => {
         assert.ok(llm.prompts[1].includes('exactly 2 items'));
     });
 
+    it('puts the style profile into the prompt when it is given, before the instruction about the labels', async () => {
+        await sessions.writeChoices(ref, FAMILIAR);
+        const answer = { component_variations: [{ intent_value: 'Warm', content: 'a' }, { intent_value: 'Cool', content: 'b' }] };
+        llm.queue(answer, answer);
+        await email.rewriteForIntent(request());
+        await email.rewriteForIntent(request({ styleProfile: { traits: ['Tends to make texts shorter (about 23% on average)'], liked: ['Direct and formal'], disliked: [], lengthChangePct: -23 } }));
+        assert.ok(!llm.prompts[0].includes('prefers in this email'));
+        assert.ok(llm.prompts[1].includes('prefers in this email') && llm.prompts[1].includes('Direct and formal'));
+        assert.ok(llm.prompts[1].indexOf('prefers in this email') < llm.prompts[1].indexOf('exactly 2 items'));
+    });
+
     it('drops an empty version and asks again when no version of another value is left', async () => {
         await sessions.writeChoices(ref, FAMILIAR);
         llm.queue({ component_variations: [{ intent_value: 'Warm', content: 'a' }, { intent_value: 'Cool', content: '  ' }] },

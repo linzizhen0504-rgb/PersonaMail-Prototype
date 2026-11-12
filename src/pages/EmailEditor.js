@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { createEditor, Editor, Transforms, Range, Text } from 'slate';
 import { Slate, Editable, withReact, useSlate, ReactEditor } from 'slate-react';
 import { withHistory, HistoryEditor } from 'slate-history';
-import { Card, message, Button, Row, Col, Tag, Modal, Input, Spin, Tour, Checkbox } from 'antd';
+import { Card, message, Button, Row, Col, Tag, Modal, Input, Spin, Tour, Checkbox, Tooltip } from 'antd';
 import { api } from '../api';
 import { SendOutlined, LeftOutlined, RightOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons';
 import { useGlobalContext } from '../App';
@@ -14,6 +14,9 @@ import { locateUnitText, locateUnitRange, changedSentenceParts, levenshtein, shu
 import { rewriteProblem, sameAsCurrent } from '../domain/rewriteChecks';
 import { aiEditEvent } from '../domain/aiEdit';
 import { recordStyleExample, attachAnalysis, examplesFor, copiesNewContent } from '../domain/styleExamples';
+import { rewriterProfile, usableProfile, recommendationReason } from '../domain/styleProfile';
+import { profileVisible } from '../domain/flags';
+import StyleProfileChip from './StyleProfileChip';
 import { getNodeText, joinSelectedBlocks } from '../domain/nodes';
 import { propagationTargets, markUnit, highlightUnit, replaceUnit, shapeUnitText, keepSubjectPrefix } from '../domain/units';
 import { PAGE_TOP_PADDING, TITLE_ROW_HEIGHT, TITLE_GAP, EDITOR_RADIUS, COLORS, EDITOR_SHADOW, QUIET_SHADOW, FRAME_TOP, FRAME_BOTTOM, SUBJECT_GAP, SUBJECT_MIN_HEIGHT, TOOLBAR_PAD_TOP, TOOLBAR_PAD_BOTTOM, TOOLBAR_BUTTON_PAD_Y, INTENTS_TOP_PADDING, EDITOR_ROW_HEIGHT } from '../layout';
@@ -22,6 +25,8 @@ import { RobotIcon } from '../icons';
 
 // The Ask AI box is hidden; the handlers and backend endpoint stay in place
 const SHOW_ASK_AI = false;
+// The style profile is for a demonstration only: the address has to say ?profile=1 (see src/domain/flags.js)
+const SHOW_PROFILE = typeof window !== 'undefined' && profileVisible(window.location.search);
 
 // The participant (?pid=P01). The URL value overrides and refreshes the sessionStorage cache, which keeps it when the app navigates
 // and drops the query string. Every event is logged with cond "cards" (the only condition left) so the log format stays the same.
@@ -467,15 +472,41 @@ const EmailEditor = () => {
     const styleSessionId = () => `${globalTaskId}:${draftVersionRef.current}`;
     // What the sender changed by using cards in this email (the last few); the other parts are rewritten in the same manner
     const styleExamplesRef = useRef([]);
+    // What the preference model has learned about the writer in this email: the profile it keeps (see src/domain/styleProfile.js)
+    const [styleProfile, setStyleProfile] = useState(null);
+    const styleProfileRef = useRef(null);
     const analysisPendingRef = useRef(null); // the analysis of the last used card (which sentences it added or removed), on its way
     const startNewStyleSession = () => {
         if (!globalTaskId) return;
         styleExamplesRef.current = [];
+        styleProfileRef.current = null;
+        setStyleProfile(null);
         const previous = styleSessionId();
         draftVersionRef.current += 1;
         api.preference.resetSession({ pid: EXPERIMENT.pid, session_id: previous }).catch((resetError) => {
             console.warn('Preference model unavailable for /reset-session:', resetError.message);
             logEvent({ event: 'model_unavailable', endpoint: 'reset-session' });
+        });
+    };
+    // The profile of this email as the preference model has it now; asked again after every operation that teaches the model something.
+    // It is used by the rewrites (what the writer prefers) and shown with ?profile=1. When the model is down nothing is shown or sent.
+    const refreshStyleProfile = () => {
+        if (!globalTaskId) return null;
+        const asked = styleSessionId();
+        return api.preference.profile({ pid: EXPERIMENT.pid, session_id: asked }).then((profile) => {
+            if (styleSessionId() !== asked) return null; // a new draft started in the meantime
+            styleProfileRef.current = profile;
+            setStyleProfile(profile);
+            if (usableProfile(profile)) {
+                logEvent({
+                    event: 'profile_updated', ops_count: profile.ops_count, strength: profile.strength,
+                    traits: profile.traits.map(trait => trait.text), liked: profile.liked.map(item => item.value), disliked: profile.disliked.map(item => item.value)
+                });
+            }
+            return profile;
+        }).catch((profileError) => {
+            console.warn('Could not read the style profile:', profileError.message);
+            return null;
         });
     };
     // The model chooses the factor selections for the request; they stay editable in the editor sidebar
@@ -1678,6 +1709,10 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                                                 <Tag style={{ margin: 0, border: 'none', background: '#eaf1fd', color: '#2f6fde', fontSize: '12px', borderRadius: '5px' }}>
                                                     {item.value}
                                                 </Tag>
+                                                {SHOW_PROFILE && (() => {
+                                                    const why = recommendationReason(item.value, cardsState.recommended, cardsState.reasons);
+                                                    return why ? <Tooltip title={why.detail}><span style={{ marginLeft: '8px', fontSize: '12px', color: '#2f6fde' }}>{why.headline}</span></Tooltip> : null;
+                                                })()}
                                             </div>
                                             <div style={{ flex: 1, fontSize: '14px', lineHeight: 1.65, whiteSpace: 'pre-wrap', marginBottom: '14px' }}>
                                                 {renderChangedSentences([unit && unit.content, getUnitNodeText(selectedComponentId, valueRef.current)], item.content)}
@@ -2306,6 +2341,9 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         session_id: cards.sessionId,
         current_text: cards.currentText,
         shown_texts: cards.items.map(i => i.content)
+    }).then((answer) => {
+        refreshStyleProfile();
+        return answer;
     }).catch((updateError) => {
         console.warn('Preference model unavailable for /update:', updateError.message);
         logEvent({
@@ -2338,6 +2376,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                 matched_dimension: answer && answer.matched ? answer.matched.dimension : null,
                 matched_value: answer && answer.matched ? answer.matched.value : null
             });
+            refreshStyleProfile();
         }).catch((updateError) => {
             console.warn('Preference model unavailable for /update:', updateError.message);
             logEvent({ unit_id: box.unitId, unit_title: box.unitTitle, event: 'model_unavailable', endpoint: 'update' });
@@ -2423,6 +2462,8 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         const intentOthers = (unit.linkedIntents || [])
             .filter(other => other.dimension !== intent.dimension)
             .map(other => ({ dimension: other.dimension, current_value: other.current_value }));
+        // What the writer has shown they prefer in this email: the rewriter lets the length and the manner of the versions follow it
+        const profileForRewrite = rewriterProfile(styleProfileRef.current);
         let filtered = 0;
         for (let attempt = 0; attempt < 2; attempt++) {
             const response = await api.intents.rewrite({
@@ -2436,7 +2477,8 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                     current_value: intent.current_value,
                     other_values: intent.other_values
                 },
-                intentOthers
+                intentOthers,
+                ...(profileForRewrite ? { styleProfile: profileForRewrite } : {})
             });
             const variations = response && response.component_variations;
             if (!Array.isArray(variations)) throw new Error('No versions returned');
@@ -2479,6 +2521,9 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         let styleStrength = null;
         let rankScores = null;
         let styleScores = null;
+        let profileScores = null;
+        let recommended = null;
+        let reasons = null;
         try {
             const ranked = await api.preference.rank({
                 pid: EXPERIMENT.pid,
@@ -2507,6 +2552,9 @@ const Toolbar = ({ compact = false, trailing = null }) => {
             styleStrength = ranked.style_strength;
             rankScores = ranked.scores || null;
             styleScores = ranked.style_scores || null;
+            profileScores = ranked.profile_scores || null;
+            recommended = ranked.recommended || null; // the card the style profile is clear about (shown only with ?profile=1)
+            reasons = ranked.reasons || null;
         } catch (rankError) {
             console.warn('Preference model unavailable for /rank:', rankError.message);
             logEvent({
@@ -2539,7 +2587,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         });
         const display = {
             unitId: unit.id, unitTitle, dimension: intent.dimension, currentValue: intent.current_value, context,
-            sessionId, currentText: unit.content, styleStrength, candidateLog, rankScores, styleScores,
+            sessionId, currentText: unit.content, styleStrength, candidateLog, rankScores, styleScores, recommended, reasons,
             items, ordering, mmrUsed, trigger,
             loading: false, error: false, regenerating: false, regenError: false, ended: false, shownAt: Date.now()
         };
@@ -2559,7 +2607,9 @@ const Toolbar = ({ compact = false, trailing = null }) => {
             filtered_candidates: candidates.filtered || 0,
             candidates: candidateLog,
             rank_scores: rankScores,
-            style_scores: styleScores
+            style_scores: styleScores,
+            profile_scores: profileScores,
+            recommended
         });
         return display;
     };
@@ -2633,6 +2683,13 @@ const Toolbar = ({ compact = false, trailing = null }) => {
             duration_ms: Date.now() - watch.startedAt,
             replaced_text: watch.replacedText,
             final_text: finalText
+        });
+        // The preference model learns from the hand edit too: what the writer changed in the text the card gave
+        api.preference.update({
+            pid: EXPERIMENT.pid, context: logContext, intent_dimension: watch.dimension, event: 'manual_edit', chosen_value: watch.chosenValue,
+            session_id: styleSessionId(), current_text: watch.replacedText, new_text: finalText
+        }).then(() => refreshStyleProfile()).catch((updateError) => {
+            console.warn('Preference model unavailable for /update:', updateError.message);
         });
     };
 
@@ -2883,6 +2940,7 @@ const Toolbar = ({ compact = false, trailing = null }) => {
         if (analysisPendingRef.current) await Promise.race([analysisPendingRef.current, new Promise(resolve => setTimeout(resolve, 1500))]);
         // Only what was changed for this intent says something about how to change it here
         const examples = examplesFor(styleExamplesRef.current, intentSelected.dimension);
+        const profileForRewrite = rewriterProfile(styleProfileRef.current);
         for (let attempt = 0; attempt < 2; attempt++) {
             const response = await api.intents.rewrite({
                 userName: globalUsername,
@@ -2896,7 +2954,8 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                     other_values: intentSelected.other_values
                 },
                 intentOthers,
-                ...(examples.length > 0 ? { styleExamples: examples } : {})
+                ...(examples.length > 0 ? { styleExamples: examples } : {}),
+                ...(profileForRewrite ? { styleProfile: profileForRewrite } : {})
             });
             const variation = ((response && response.component_variations) || [])
                 .find(v => v && v.intent_value === intentSelected.current_value);
@@ -3614,7 +3673,10 @@ const Toolbar = ({ compact = false, trailing = null }) => {
                                     justifyContent: 'space-between',
                                     gap: '8px'
                                 }}>
-                                    <span>Email Components ({components.length})</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                        Email Components ({components.length})
+                                        {SHOW_PROFILE && <StyleProfileChip profile={styleProfile} />}
+                                    </span>
                                     {<Button
                                             ref={generateButtonRef}
                                             data-leave-cards="true"

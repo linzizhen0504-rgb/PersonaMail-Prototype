@@ -4,6 +4,7 @@ const { ValidationError, NotFoundError, ModelOutputError } = require('../../cont
 const { createJsonRequester, parseModelJson } = require('../llm');
 const { normalizeName, plainName } = require('./names');
 const { styleExamplesSection } = require('./styleExamples');
+const { styleProfileSection } = require('./styleProfile');
 const { cleanLinks, ensureEveryComponentLinked } = require('./links');
 const { alignVariationValues, variationsMatchValues } = require('./variations');
 const { filterFactorChoices, cleanFactorSelection } = require('./factors');
@@ -122,7 +123,7 @@ function createEmailServices({ llm, sessions, prompts, catalog }) {
         },
 
         // The versions of one component under every value of one intent
-        async rewriteForIntent({ ref, userTask, draftLatest, componentCurrent, intentSelected, intentOthers, styleExamples }) {
+        async rewriteForIntent({ ref, userTask, draftLatest, componentCurrent, intentSelected, intentOthers, styleExamples, styleProfile }) {
             const factorChoices = await sessions.readChoices(ref);
             if (!userTask || !factorChoices || !draftLatest || !componentCurrent || !intentSelected || !intentOthers) {
                 throw new ValidationError('Missing required fields in the request body');
@@ -142,6 +143,7 @@ function createEmailServices({ llm, sessions, prompts, catalog }) {
             placeholderNames.forEach((placeholder, index) => {
                 if (index < expectedValues.length) labelledPrompt = labelledPrompt.split(`"${placeholder}"`).join(JSON.stringify(String(expectedValues[index])));
             });
+            labelledPrompt += styleProfileSection(styleProfile);
             labelledPrompt += styleExamplesSection(styleExamples);
             labelledPrompt += `\n\n**Important:** "component_variations" must contain exactly ${expectedValues.length} items, one for each of these intent values, and every "intent_value" must be copied exactly from this list (never a placeholder name): ${JSON.stringify(expectedValues)}.`;
 

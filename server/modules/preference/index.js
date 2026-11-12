@@ -20,12 +20,13 @@ function createModelServicePreference({ baseUrl, timeoutMs = 2000, post = axios.
         update: (event) => call('/update', event),
         rejectCheck: (request) => call('/reject-check', request),
         resetSession: (request) => call('/reset-session', request),
-        analyzeChange: (request) => call('/analyze-change', request)
+        analyzeChange: (request) => call('/analyze-change', request),
+        profile: (request) => call('/profile', request)
     };
 }
 
 // A PreferencePort for tests: answers with what it was given, remembers the calls, or fails with the error it was given
-function createFakePreference({ rank, rejectCheck, analyzeChange, failWith } = {}) {
+function createFakePreference({ rank, rejectCheck, analyzeChange, profile, failWith } = {}) {
     const calls = [];
     const run = async (method, payload, result) => {
         calls.push({ method, payload });
@@ -38,9 +39,13 @@ function createFakePreference({ rank, rejectCheck, analyzeChange, failWith } = {
         update: (event) => run('update', event, { ok: true }),
         rejectCheck: (request) => run('rejectCheck', request, rejectCheck || { reject_mean: 0, exceeds: false }),
         resetSession: (request) => run('resetSession', request, { ok: true }),
-        analyzeChange: (request) => run('analyzeChange', request, analyzeChange || { added: [], removed: [], reworded: 0, kept: 0 })
+        analyzeChange: (request) => run('analyzeChange', request, analyzeChange || { added: [], removed: [], reworded: 0, kept: 0 }),
+        profile: (request) => run('profile', request, profile || EMPTY_PROFILE)
     };
 }
+
+// What the page gets when there is no profile (the model is down, or nothing was done yet)
+const EMPTY_PROFILE = { ops_count: 0, strength: 0, evidence: 0, liked: [], disliked: [], stats: { changes: 0, mean_length_change_pct: 0, with_added: 0, with_removed: 0, only_reworded: 0 }, traits: [], recent: [] };
 
 function shuffled(items, random) {
     const copy = [...items];
@@ -77,6 +82,15 @@ function createPreferenceService({ preference, random = Math.random }) {
         update: (event) => preference.update(event),
         rejectCheck: (request) => preference.rejectCheck(request),
         resetSession: (request) => preference.resetSession(request),
+        // The style profile of one email; empty and marked as not available when the model is down (the page then shows nothing)
+        async profile(request) {
+            try {
+                return { ...(await preference.profile(request)), available: true };
+            } catch (error) {
+                if (!(error instanceof PreferenceUnavailableError)) throw error;
+                return { ...EMPTY_PROFILE, available: false };
+            }
+        },
         // What a used card changed. When the model is down the answer is "nothing", marked as not available (the page then goes on without it)
         async analyzeChange(request) {
             try {

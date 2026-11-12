@@ -52,6 +52,7 @@ class Store:
         self.priors_path = self.data_dir / "priors.json"
         self.stats_path = self.data_dir / "stats.json"
         self.styles_path = self.data_dir / "styles.json"
+        self.profiles_path = self.data_dir / "profiles.json"
 
     def load_counts(self):
         data = read_json(self.counts_path, {})
@@ -81,3 +82,10 @@ class Store:
 
     def save_styles(self, data):
         write_json_atomic(self.styles_path, data)
+
+    def load_profiles(self):
+        """{ "pid|session": profile dict }: the style profile of one email of one participant (see style_profile.py)."""
+        return read_json(self.profiles_path, {})
+
+    def save_profiles(self, data):
+        write_json_atomic(self.profiles_path, data)

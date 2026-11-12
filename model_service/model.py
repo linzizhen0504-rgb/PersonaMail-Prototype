@@ -7,7 +7,9 @@ import numpy as np
 
 import config
 from embedding import cosine
+from change import analyze_change
 from style import StyleState, relative_scores
+from style_profile import Profile
 
 ACCEPT, REJECT = 0, 1
 
@@ -16,6 +18,7 @@ LEGACY_EVENTS = {"edit": "pick", "reject_all": "regenerate"}
 CHOSEN_EVENTS = {"pick"}
 UNCHOSEN_EVENTS = {"regenerate", "leave"}
 AI_EDIT_EVENT = "ai_edit"
+MANUAL_EDIT_EVENT = "manual_edit"   # the user edited by hand the text of a card they had used
 
 
 def normalize(text):
@@ -66,6 +69,12 @@ class PreferenceModel:
             "style_weight": config.STYLE_WEIGHT,
             "style_value_weight": config.STYLE_VALUE_WEIGHT,
             "style_delta_scale": config.STYLE_DELTA_SCALE,
+            "profile_weight": config.PROFILE_WEIGHT,
+            "profile_value_weight": config.PROFILE_VALUE_WEIGHT,
+            "profile_length_weight": config.PROFILE_LENGTH_WEIGHT,
+            "profile_ops_full": config.PROFILE_OPS_FULL,
+            "profile_recommend_score": config.PROFILE_RECOMMEND_SCORE,
+            "profile_recommend_confidence": config.PROFILE_RECOMMEND_CONFIDENCE,
         }
         self.cfg.update(overrides)
 
@@ -143,6 +152,9 @@ class PreferenceModel:
             styles = self.store.load_styles()
             if styles.pop(self._style_key(pid, session_id), None) is not None:
                 self.store.save_styles(styles)
+            profiles = self.store.load_profiles()
+            if profiles.pop(self._style_key(pid, session_id), None) is not None:
+                self.store.save_profiles(profiles)
 
     def style_feature(self, value, text, current_text):
         """What a card says about style: how its text differs from the current text (content cancels out), plus the
@@ -175,6 +187,99 @@ class PreferenceModel:
             styles[key] = state.to_dict()
             self.store.save_styles(styles)
         return state
+
+    # ----- the style profile of an email -----
+    def profile_state(self, pid, session_id):
+        """A copy of the profile of this email (empty if none)."""
+        with self.store.lock:
+            data = self.store.load_profiles().get(self._style_key(pid, session_id))
+        return Profile.from_dict(data) if data else Profile()
+
+    def profile_summary(self, pid, session_id):
+        """The profile with two numbers: `strength` (how much the changes of the writer point the same way: it can fall when they change very
+        different texts) and `evidence` (how much there is to go on: it only grows with the operations, full at `profile_ops_full`)."""
+        summary = self.profile_state(pid, session_id).summary(self.style_state(pid, session_id).strength)
+        summary["evidence"] = round(min(1.0, summary["ops_count"] / self.cfg["profile_ops_full"]), 4)
+        return summary
+
+    def _change_profile(self, pid, session_id, feed):
+        """Let `feed(profile)` add to the profile of this email and save it. Nothing without a session."""
+        if not session_id:
+            return
+        with self.store.lock:
+            profiles = self.store.load_profiles()
+            key = self._style_key(pid, session_id)
+            profile = Profile.from_dict(profiles[key]) if key in profiles else Profile()
+            feed(profile)
+            profiles[key] = profile.to_dict()
+            self.store.save_profiles(profiles)
+
+    def _profile_display(self, pid, session_id, event, dimension, chosen_value, shown_values, shown_texts, current_text):
+        """A card was taken, regenerated or left: what it changed (when the texts are known) and which cards were passed over."""
+        shown = list(shown_values or [])
+        texts = list(shown_texts or [])
+        chosen_key = normalize(chosen_value)
+
+        def feed(profile):
+            if event == "pick":
+                index = next((i for i, v in enumerate(shown) if normalize(v) == chosen_key), None)
+                if index is not None and index < len(texts) and texts[index] and current_text:
+                    profile.record_change("pick", dimension, chosen_value, current_text, texts[index],
+                                          analyze_change(self.embedder, current_text, texts[index]))
+                others = [v for v in shown if normalize(v) != chosen_key]
+                if others:
+                    profile.record_rejection(dimension, others, config.STYLE_SIBLING_WEIGHT)
+            elif event == "regenerate":
+                profile.record_rejection(dimension, shown, config.STYLE_REGENERATE_WEIGHT)
+            elif event == "leave":
+                profile.record_rejection(dimension, shown, config.STYLE_LEAVE_WEIGHT)
+
+        self._change_profile(pid, session_id, feed)
+
+    def _update_manual_edit(self, pid, session_id, dimension, chosen_value, current_text, new_text):
+        """The user changed by hand the text of a card they had used: another change, no counts."""
+        if current_text and new_text and session_id:
+            analysis = analyze_change(self.embedder, current_text, new_text)
+            self._change_profile(pid, session_id, lambda profile: profile.record_change(
+                "manual_edit", dimension, chosen_value, current_text, new_text, analysis))
+        return {"updated": True, "counts": {}, "tally": None}
+
+    def _profile_scores(self, pid, session_id, candidates, current_text):
+        """The profile term of the ranking: {value: relative score in [-1, 1]}, the confidence of the profile, and for every card the reason
+        (the value taken that it is closest to, and the length change it would make)."""
+        zero = {c["value"]: 0.0 for c in candidates}
+        if not session_id or not candidates:
+            return zero, 0.0, {}
+        profile = self.profile_state(pid, session_id)
+        operations = profile.changes + profile.rejections
+        if operations == 0:
+            return zero, 0.0, {}
+        liked = [(value, weight) for (_, value), weight in profile.liked.items()]
+        disliked = [(value, weight) for (_, value), weight in profile.disliked.items()]
+        mean_log = profile.sum_log / profile.changes if profile.changes else None
+
+        def closeness(vector, group):
+            total = sum(weight for _, weight in group)
+            return sum(weight * cosine(vector, self.embedder.embed(value)) for value, weight in group) / total if total else 0.0
+
+        raw, reasons = [], {}
+        for candidate in candidates:
+            vector = self.embedder.embed(candidate["value"])
+            value_term = closeness(vector, liked) - closeness(vector, disliked)
+            length_term, log_ratio = 0.0, None
+            if mean_log is not None and candidate.get("text") and current_text:
+                log_ratio = float(np.log(max(1, len(candidate["text"])) / max(1, len(current_text))))
+                length_term = -abs(log_ratio - mean_log)
+            raw.append(self.cfg["profile_value_weight"] * value_term + self.cfg["profile_length_weight"] * length_term)
+            nearest = max(((cosine(vector, self.embedder.embed(value)), value) for value, _ in liked), default=None)
+            reasons[candidate["value"]] = {
+                "nearest_liked": {"value": nearest[1], "similarity": round(float(nearest[0]), 4)} if nearest else None,
+                "length_change_pct": round((float(np.exp(log_ratio)) - 1) * 100) if log_ratio is not None else None,
+            }
+        raw = np.asarray(raw, dtype=float)
+        relative = (np.clip((raw - raw.mean()) / (raw.std() + 0.05), -2, 2) / 2).tolist()
+        confidence = min(1.0, operations / self.cfg["profile_ops_full"])
+        return {c["value"]: relative[i] for i, c in enumerate(candidates)}, confidence, reasons
 
     # ----- ranking -----
     def sample_scores(self, params_list):
@@ -221,6 +326,11 @@ class PreferenceModel:
                         style_scores[c["value"]] = relative[i]
                         scores[i] += self.cfg["style_weight"] * style_strength * relative[i]
 
+            # Profile term: the values the writer took and passed over, and the length change they tend to make
+            profile_scores, profile_confidence, reasons = self._profile_scores(pid, session_id, candidates, current_text)
+            for i, c in enumerate(candidates):
+                scores[i] += self.cfg["profile_weight"] * profile_confidence * profile_scores[c["value"]]
+
             mmr_used = len(candidates) > k
             if mmr_used:
                 embeddings = [self.embedder.embed(c["text"]) for c in candidates]
@@ -251,7 +361,20 @@ class PreferenceModel:
             "mmr_used": mmr_used,
             "style_scores": style_scores,
             "style_strength": style_strength,
+            "profile_scores": profile_scores,
+            "profile_confidence": profile_confidence,
+            "reasons": reasons,
+            "recommended": self._recommended(profile_scores, profile_confidence, reasons),
         }
+
+    def _recommended(self, profile_scores, confidence, reasons):
+        """The card the profile is clear about (it has a reason to show), or None."""
+        if confidence < self.cfg["profile_recommend_confidence"] or not profile_scores:
+            return None
+        value, score = max(profile_scores.items(), key=lambda item: item[1])
+        if score < self.cfg["profile_recommend_score"] or not (reasons.get(value) or {}).get("nearest_liked"):
+            return None
+        return value
 
     # ----- updates -----
     def _count(self, pid, context, dimension, event, increments):
@@ -304,7 +427,7 @@ class PreferenceModel:
             return None
         return {"dimension": best["dimension"], "value": best["value"], "similarity": round(float(best_score), 4)}
 
-    def _update_ai_edit(self, pid, context, session_id, prompt, current_text, new_text, candidates):
+    def _update_ai_edit(self, pid, context, session_id, prompt, current_text, new_text, candidates, dimension=None):
         """The user did not take a card but used text the AI wrote for a prompt. A clear match of the prompt with one of
         the values counts as a pick of that value; the style of the change is learned in any case."""
         matched = self.match_prompt(prompt, candidates)
@@ -323,13 +446,19 @@ class PreferenceModel:
                 self.store.save_styles(styles)
             result["updated"] = True
             result["style_strength"] = state.strength
+        if session_id and new_text and current_text:
+            analysis = analyze_change(self.embedder, current_text, new_text)
+            self._change_profile(pid, session_id, lambda profile: profile.record_change(
+                "ai_edit", matched["dimension"] if matched else dimension, matched["value"] if matched else None, current_text, new_text, analysis))
         return result
 
     def update(self, pid, context, dimension, event, chosen_value, shown_values=None,
                session_id=None, current_text=None, shown_texts=None, prompt=None, new_text=None, candidates=None):
         event = canonical_event(event)
         if event == AI_EDIT_EVENT:
-            return self._update_ai_edit(pid, context, session_id, prompt, current_text, new_text, candidates)
+            return self._update_ai_edit(pid, context, session_id, prompt, current_text, new_text, candidates, dimension)
+        if event == MANUAL_EDIT_EVENT:
+            return self._update_manual_edit(pid, session_id, dimension, chosen_value, current_text, new_text)
         increments = event_increments(event, chosen_value, shown_values)
         if not increments:
             return {"updated": False, "counts": {}, "tally": None}
@@ -337,6 +466,7 @@ class PreferenceModel:
         style_strength = None
         if session_id:
             style_strength = self._update_style(pid, session_id, event, chosen_value, shown_values, shown_texts, current_text).strength
+            self._profile_display(pid, session_id, event, dimension, chosen_value, shown_values, shown_texts, current_text)
         return {**counted, "style_strength": style_strength}
 
     @staticmethod

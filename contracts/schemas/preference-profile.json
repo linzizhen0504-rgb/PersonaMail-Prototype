@@ -1,0 +1,95 @@
+{
+  "name": "preference-profile",
+  "method": "POST",
+  "path": "/preference/profile",
+  "description": "The style profile of one email: what the participant changed, added up (liked and passed-over values, statistics, statements with their evidence, the last operations)",
+  "request": {
+    "type": "object",
+    "properties": {
+      "pid": {
+        "type": "string",
+        "minLength": 1
+      },
+      "session_id": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "pid",
+      "session_id"
+    ]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "available": {
+        "type": "boolean"
+      },
+      "ops_count": {
+        "type": "integer"
+      },
+      "strength": {
+        "type": "number",
+        "description": "How much the changes of the writer point the same way; it can fall when they change very different texts"
+      },
+      "liked": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "disliked": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "stats": {
+        "type": "object"
+      },
+      "traits": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "recent": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "evidence": {
+        "type": "number",
+        "description": "How much there is to go on: grows with the operations, full at four. (strength is how much the changes point the same way, and can fall.)"
+      }
+    },
+    "additionalProperties": true,
+    "required": [
+      "available",
+      "ops_count",
+      "strength",
+      "liked",
+      "disliked",
+      "stats",
+      "traits",
+      "recent"
+    ]
+  }
+}

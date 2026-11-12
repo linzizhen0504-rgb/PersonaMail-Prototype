@@ -47,6 +47,14 @@ describe('model service adapter', () => {
         assert.equal(calls[0].url, 'http://s/analyze-change');
     });
 
+    it('asks the service for the profile of an email, on the path of the service', async () => {
+        const reply = { ops_count: 2, strength: 0.4, liked: [], disliked: [], stats: {}, traits: [], recent: [] };
+        const { calls, post } = recording(reply);
+        const result = await createModelServicePreference({ baseUrl: 'http://s', post }).profile({ pid: 'P01', session_id: 's1' });
+        assert.deepEqual(result, reply);
+        assert.equal(calls[0].url, 'http://s/profile');
+    });
+
     it('reports a service that cannot be reached as a PreferenceUnavailableError', async () => {
         const { post } = recording(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
         await assert.rejects(() => createModelServicePreference({ baseUrl: 'http://s', post }).rank(RANK),
@@ -154,5 +162,25 @@ describe('preference service: what a used card changed', () => {
         const preference = createFakePreference({ failWith: new PreferenceUnavailableError('down') });
         const result = await createPreferenceService({ preference }).analyzeChange(CHANGE);
         assert.deepEqual(result, { added: [], removed: [], reworded: 0, kept: 0, available: false });
+    });
+});
+
+describe('preference service: the profile of an email', () => {
+    const REQUEST = { pid: 'P01', session_id: 's1' };
+    const PROFILE = { ops_count: 3, strength: 0.5, liked: [{ dimension: 'Tone', value: 'Direct', weight: 1 }], disliked: [], stats: { changes: 2 }, traits: [], recent: [] };
+
+    it('gives the profile of the model and says it was available', async () => {
+        const preference = createFakePreference({ profile: PROFILE });
+        const result = await createPreferenceService({ preference }).profile(REQUEST);
+        assert.deepEqual(result, { ...PROFILE, available: true });
+        assert.deepEqual(preference.calls[0], { method: 'profile', payload: REQUEST });
+    });
+
+    it('gives an empty profile marked as not available when the model is down (the page then shows nothing)', async () => {
+        const preference = createFakePreference({ failWith: new PreferenceUnavailableError('down') });
+        const result = await createPreferenceService({ preference }).profile(REQUEST);
+        assert.equal(result.available, false);
+        assert.deepEqual([result.ops_count, result.liked, result.traits, result.recent], [0, [], [], []]);
+        assert.equal(result.evidence, 0);
     });
 });

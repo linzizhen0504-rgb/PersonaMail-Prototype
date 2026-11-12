@@ -47,7 +47,8 @@ export function createApi({ http = backend, staticHttp = pageFiles } = {}) {
             update: preference('update'),
             rejectCheck: preference('reject-check'),
             resetSession: preference('reset-session'),
-            analyzeChange: preference('analyze-change')
+            analyzeChange: preference('analyze-change'),
+            profile: preference('profile')
         },
         logging: {
             logEvent: (record) => post('/log-event', record)

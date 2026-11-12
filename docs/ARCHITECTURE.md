@@ -160,6 +160,50 @@ Constraints that follow from the weak points seen:
 - When the preference service is down the analysis is empty (`available: false`) and the rewrite goes on with the examples alone; the page waits at most 1.5
   seconds for it. Every analysis is written to the log (`card_change_analyzed`), so that it can be checked afterwards.
 
+## The style profile of one email
+
+`model_service/style_profile.py` adds up, for one email of one participant, what the writer did: the cards used (with the sentences each added or
+removed and its change of length), AI rewrites accepted, hand edits made after a card, and the cards passed over. It has two numbers: `evidence` (`min(1, operations / 4)`, only grows) and `strength` (how much the changes of the writer point the same way; the formula
+`min(1, mass / 2) × |p| / mass` falls when the changes are about different texts, because their directions are nearly orthogonal). It is fed by the events the page already
+sends to `/update` (`pick`, `regenerate`, `leave`, `ai_edit`, and the new `manual_edit`), stored in `profiles.json` under the same key as the style state and
+cleared with it, and read with `POST /profile` (`/preference/profile` of the backend). Its statements ("tends to make texts shorter", "often adds new
+sentences", "mostly changes the wording only") are plain rules on counts and need two changes of evidence; each lists the values it comes from.
+
+It is used in three places:
+- **Shown** (only with `?profile=1`, see `src/domain/flags.js`): the Style tag of the component list and the reason line of the card the profile is clear about.
+- **Ranking**: `rank` adds `profile_weight × confidence × relative profile score`. The score is the closeness (MiniLM) of the value words of a card to the values
+  the writer took, minus the closeness to the ones they passed over, plus a small length term; `reasons` and `recommended` come with it.
+- **Rewriting**: the page sends `styleProfile` (statements, values taken and passed over, the length to aim for) to `/intent-change-rewriter`; the prompt section is
+  `server/modules/email/styleProfile.js`. It is sent in the generation of version cards and in the rewrites of the propagation window.
+
+What the study logs say (read-only replay with the real model and the real code path, 74 picks of 43 emails, four seeds, random order switched off):
+
+| | Taken card ranked first | Mean rank of the taken card |
+|---|---|---|
+| Without the profile term | 40.2% | 1.892 |
+| With it (weight 1, length weight 0.1: what is built in) | 44.6% | 1.899 |
+| Weight 2, length weight 0.1 | 43.2% | 1.895 |
+| Length term alone (weight 2) | 37.8% | 1.959 |
+
+The paired difference of the mean rank to the baseline is inside the noise (about ±0.11) for every setting, so **the ranking is not shown to be better**. The
+length term alone was worse than the baseline, so its weight was cut to 0.1. For the card the profile calls recommended (it did so in 30% of the picks, where it
+had a reason to show): it was the card taken in 55% of those cases (chance 33%); the four seeds replay the same picks, so this rests on about 22 different picks.
+
+Rewriting, with the real model (14 real propagation rewrites of the logs, each with the profile the email had at that moment, three repeats per arm; arms: nothing /
+examples and sentence analysis / those plus the profile):
+- **Taking the profile in did not change the rewrites in a way these measures can see.** Alignment of the change with the change of the used card
+  (+0.051 with the profile, +0.026 without; two repeats of the same arm differ by 0.095), closeness to the card's own text, and how different the versions of the
+  different values are from each other (0.333 against 0.337) are all inside the noise. No rewrite copied a sentence the card had added.
+- But the profiles of these emails held almost only values taken and passed over: the emails had fewer than two changes at that moment, so only one of the 14 had a
+  statement and a length to aim for. In that one the rewrite followed the aim (length change +0.47 in log terms with the profile, +0.14 without, aim +0.40).
+- **The length instruction is followed.** Giving every case a profile that says "about 30% shorter" or "about 40% longer" (nothing else changed) moved the length of the
+  rewrite the asked way in 14 of 14 and 13 of 14 cases: 0.86 against 1.38 of the current length with none, and 1.80 for longer (the size is only roughly the one asked for).
+  This shows that the instruction is obeyed, not that the result reads better.
+- Versions returned unchanged (of 168 per arm): 6 without examples, 14 with the examples and the analysis, 14 with the profile too: the examples seem to make the model
+  more careful about changing the text.
+
+What is not known: whether a rewrite that follows the profile reads better to the writer (nobody read them), and whether the profile helps over several emails (it is kept for one email only; the logs of `P01` mix several people, so they cannot show it).
+
 ## Known limits and to do
 
 - **Split `EmailEditor.js` (about 4,200 lines).** It still holds the editor (Slate), the version cards, the propagation window, the sidebar

@@ -49,6 +49,11 @@ class AnalyzeChangeRequest(BaseModel):
     after: Optional[str] = None
 
 
+class ProfileRequest(BaseModel):
+    pid: str
+    session_id: str
+
+
 class ResetSessionRequest(BaseModel):
     pid: str
     session_id: str
@@ -100,6 +105,10 @@ def create_app(model=None):
     @app.post("/analyze-change")
     def analyze_change_endpoint(req: AnalyzeChangeRequest):
         return analyze_change(model.embedder, req.before, req.after)
+
+    @app.post("/profile")
+    def profile(req: ProfileRequest):
+        return model.profile_summary(req.pid, req.session_id)
 
     @app.post("/reset-session")
     def reset_session(req: ResetSessionRequest):

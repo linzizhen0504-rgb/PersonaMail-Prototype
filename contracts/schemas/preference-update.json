@@ -2,7 +2,7 @@
   "name": "preference-update",
   "method": "POST",
   "path": "/preference/update",
-  "description": "Tell the preference model how a display of versions ended (pick, regenerate, leave), or that the user used AI-written text instead of a card (ai_edit)",
+  "description": "Tell the preference model how a display of versions ended (pick, regenerate, leave), or that the user used AI-written text instead of a card (ai_edit); or that the participant edited by hand the text of a card they had used (manual_edit: current_text is the card text, new_text the final text)",
   "request": {
     "type": "object",
     "properties": {

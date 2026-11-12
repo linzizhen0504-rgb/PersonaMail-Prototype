@@ -48,3 +48,12 @@ CHANGE_KEPT_SIMILARITY = 0.9
 CHANGE_REWORDED_SIMILARITY = 0.55
 CHANGE_MAX_SENTENCES = 5     # listed per group
 CHANGE_MAX_LENGTH = 300      # characters of a listed sentence
+
+# Ranking by the style profile of the email (style_profile.py): how close a card's value is to the values the writer took and passed over, and
+# whether its length change is the one the writer tends to make. The weight was chosen by replaying the study logs (see docs/ARCHITECTURE.md).
+PROFILE_WEIGHT = 1.0            # how far the profile term can move a card's score (confidence 1, relative score 1)
+PROFILE_VALUE_WEIGHT = 1.0      # the closeness of the value words
+PROFILE_LENGTH_WEIGHT = 0.1     # the likeness of the length change (a log ratio); small: alone it ranked worse than the baseline in the replay
+PROFILE_OPS_FULL = 4            # operations in the email at which the profile counts fully
+PROFILE_RECOMMEND_SCORE = 0.3   # the top card is called recommended when its relative profile score is at least this ...
+PROFILE_RECOMMEND_CONFIDENCE = 0.5   # ... and the profile is at least this confident
